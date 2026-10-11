@@ -69,7 +69,7 @@ export const EvalBar: React.FC<EvalBarProps> = ({
         }`}
         initial={false}
         animate={{ height: `${bottomPercent}%` }}
-        transition={{ type: 'spring', damping: 26, stiffness: 190 }}
+        transition={{ type: 'spring', damping: 32, stiffness: 140, mass: 0.8 }}
       />
 
       {/* Equality centerline (50%) */}

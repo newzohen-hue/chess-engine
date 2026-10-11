@@ -32,7 +32,7 @@ export const UciConsole: React.FC<UciConsoleProps> = ({
   onToggle,
 }) => {
   const [logs, setLogs] = useState<string[]>([
-    'HCE Chess Engine UCI Protocol ready.',
+    'Stockfish NNUE Chess Engine UCI Protocol ready.',
     "Type 'uci', 'isready', 'position startpos', 'go depth 6', or 'eval'.",
   ]);
   const [inputCmd, setInputCmd] = useState<string>('');

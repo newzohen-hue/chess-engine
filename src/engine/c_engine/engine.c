@@ -363,11 +363,9 @@ int is_in_check(const Position* pos, int color) {
     int dir = bishop_dirs[d];
     int cur = king_sq;
     while (1) {
-      int prev_r = cur / 8;
       int prev_c = cur % 8;
       cur += dir;
       if (cur < 0 || cur >= 64) break;
-      int next_r = cur / 8;
       int next_c = cur % 8;
       if (next_c - prev_c != 1 && next_c - prev_c != -1) break;
       uint8_t p = pos->board[cur];

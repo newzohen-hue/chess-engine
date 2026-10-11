@@ -107,7 +107,7 @@ export const MoveHistory: React.FC<MoveHistoryProps> = ({
 
   const exportPGN = () => {
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '.');
-    let pgn = `[Event "Шахматная партия"]\n[Site "Шахматный движок HCE"]\n[Date "${dateStr}"]\n[Round "1"]\n[White "Белые"]\n[Black "Чёрные"]\n[Result "*"]\n`;
+    let pgn = `[Event "Шахматная партия"]\n[Site "Stockfish NNUE Chess Engine"]\n[Date "${dateStr}"]\n[Round "1"]\n[White "Белые"]\n[Black "Чёрные"]\n[Result "*"]\n`;
     if (opening) {
       pgn += `[ECO "${opening.eco}"]\n[Opening "${opening.name}"]\n`;
     }

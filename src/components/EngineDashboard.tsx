@@ -4,6 +4,7 @@ import {
   HceBreakdown,
   SKILL_CONFIGS,
   SearchStats,
+  SearchStrategy,
 } from '../types/chess';
 import { BenchmarkSuiteResult, runWasmEngineBenchmark } from '../engine/benchmark';
 import { TacticalThreat } from '../engine/threats';
@@ -23,6 +24,7 @@ import {
   AlertTriangle,
   Lightbulb,
   Award,
+  Binary,
 } from 'lucide-react';
 
 interface EngineDashboardProps {
@@ -37,6 +39,8 @@ interface EngineDashboardProps {
   onToggleQuiescence: () => void;
   skillLevel: EngineSkillLevel;
   onSkillLevelChange: (level: EngineSkillLevel) => void;
+  searchStrategy: SearchStrategy;
+  onSearchStrategyChange: (strategy: SearchStrategy) => void;
   useOpeningBook: boolean;
   onToggleOpeningBook: () => void;
   currentOpening?: { eco: string; name: string; nameRu: string } | null;
@@ -57,6 +61,8 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
   onToggleQuiescence,
   skillLevel,
   onSkillLevelChange,
+  searchStrategy,
+  onSearchStrategyChange,
   useOpeningBook,
   onToggleOpeningBook,
   currentOpening,
@@ -111,9 +117,15 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
           </div>
           <div>
             <h3 className="text-sm font-semibold tracking-tight text-white flex items-center gap-2">
-              Движок HCE
-              <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded border font-bold bg-emerald-500/20 text-emerald-300 border-emerald-500/40">
-                ⚡ C / WASM + GM Book
+              Шахматный движок
+              <span
+                className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border font-bold ${
+                  searchStrategy === 'nnue'
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : 'bg-blue-500/20 text-blue-300 border-blue-500/40'
+                }`}
+              >
+                {searchStrategy === 'nnue' ? '🧠 NNUE (Нейросеть)' : '⚡ HCE (C / WASM)'}
               </span>
             </h3>
             <p className="text-xs text-slate-400">
@@ -135,8 +147,9 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
 
         {/* Current Score Display */}
         <div className="flex flex-col items-end">
-          <span className="text-xs uppercase text-slate-500 font-semibold tracking-wider">
-            Оценка
+          <span className="text-[10px] uppercase text-slate-500 font-semibold tracking-wider flex items-center gap-1">
+            <span>Оценка</span>
+            <span className="text-emerald-400 font-mono">({searchStrategy === 'nnue' ? 'NNUE' : 'HCE'})</span>
           </span>
           <span
             className={`text-lg font-mono font-bold ${
@@ -151,6 +164,53 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
           >
             {scoreStr}
           </span>
+        </div>
+      </div>
+
+      {/* Dual Search Strategy Selector (NNUE vs HCE) */}
+      <div className="flex flex-col gap-1.5 bg-slate-950/80 p-2.5 rounded-lg border border-slate-800">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+            <Zap className="w-3.5 h-3.5 text-amber-400" />
+            <span>Стратегия поиска (Оценка позиции):</span>
+          </span>
+          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded border font-bold bg-slate-800 text-slate-300 border-slate-700">
+            {searchStrategy === 'nnue' ? '🧠 Neural Net' : '📐 PeSTO + Handcrafted'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 mt-1">
+          <button
+            type="button"
+            onClick={() => onSearchStrategyChange('nnue')}
+            className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
+              searchStrategy === 'nnue'
+                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 border-emerald-400 text-white shadow-lg shadow-emerald-950/50'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-emerald-300" />
+            <div className="flex flex-col items-start leading-tight">
+              <span>NNUE Нейросеть</span>
+              <span className="text-[10px] opacity-75 font-normal">Stockfish HalfKAv2</span>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onSearchStrategyChange('hce')}
+            className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
+              searchStrategy === 'hce'
+                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 border-blue-400 text-white shadow-lg shadow-blue-950/50'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
+            }`}
+          >
+            <Binary className="w-4 h-4 text-blue-300" />
+            <div className="flex flex-col items-start leading-tight">
+              <span>HCE Классика</span>
+              <span className="text-[10px] opacity-75 font-normal">C / WASM + PeSTO</span>
+            </div>
+          </button>
         </div>
       </div>
 
@@ -358,6 +418,17 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
                   {breakdown.material.diff > 0 ? '+' : ''}{breakdown.material.diff} cp
                 </span>
               </div>
+
+              {breakdown.nnueScore !== undefined && (
+                <div className="flex items-center justify-between p-1.5 rounded bg-emerald-950/40 border border-emerald-500/30">
+                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-emerald-400" /> Нейросеть NNUE:
+                  </span>
+                  <span className="font-mono font-bold text-emerald-300">
+                    {breakdown.nnueScore > 0 ? '+' : ''}{breakdown.nnueScore} cp
+                  </span>
+                </div>
+              )}
 
               <div className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800">
                 <span className="text-slate-400">Таблицы PST (PeSTO):</span>

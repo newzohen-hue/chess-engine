@@ -1,30 +1,11 @@
 /**
- * Handcrafted Evaluation (HCE) for Chess Engine.
- * Comprehensive, master-grade chess positional evaluation:
- * - Material Base Values (Tapered Midgame & Endgame)
- * - PeSTO Piece-Square Tables (Rank 8 to Rank 1)
- * - Detailed Pawn Structure:
- *   * Passed Pawns (Rank progression, protected passed pawns, connected passed pawns)
- *   * Isolated Pawns (Differentiating open vs closed files)
- *   * Doubled & Tripled Pawns (With severe penalty for isolated doubled pawns)
- *   * Backward Pawns & Pawn Phalanxes (Connected pawn chains)
- *   * Center pawn occupation
- * - King Safety & Activity:
- *   * Pawn Shield (Rank 2 and Rank 3 coverage)
- *   * Exposed King Penalties (Open / Semi-open files towards king)
- *   * Castling status & Center entrapment
- *   * Endgame King Centralization (Proximity to center squares)
- * - Piece Activity & Coordination:
- *   * Rooks on open and semi-open files
- *   * Rooks on 7th rank (attacking base pawns / restricting king)
- *   * Connected rooks
- *   * Bishop pair bonus & Bad bishop pawn-color penalties
- *   * Knight outposts on ranks 4-6 & Rim knight penalty
- * - Smooth tapered game phase interpolation (0 = Endgame, 24 = Opening/Midgame)
+ * Position Evaluation Module for Chess Engine.
+ * Powered by Stockfish NNUE architecture (HalfKAv2_hm neural network).
  */
 
-import { BoardState, Color, HceBreakdown, PieceType } from '../types/chess';
+import { BoardState, Color, PositionBreakdown, PieceType } from '../types/chess';
 import { squareToFile, squareToRank, toSquare } from './chessRules';
+import { evaluateNnue, isNnueLoaded } from './nnue';
 
 // Material base values (Centipawns)
 export const PIECE_VALUES: Record<PieceType, { mg: number; eg: number }> = {
@@ -213,17 +194,31 @@ export function getGamePhase(board: (any | null)[]): number {
 }
 
 /**
- * Fast evaluation returning centipawns relative to side to move
+ * Fast evaluation returning centipawns relative to side to move.
+ * Uses Stockfish NNUE neural network evaluation.
  */
 export function evaluateBoard(state: BoardState): number {
+  if (isNnueLoaded()) {
+    const nnue = evaluateNnue(state);
+    if (nnue !== null) {
+      return state.turn === 'w' ? nnue : -nnue;
+    }
+  }
   const scoreFromWhite = evaluateFromWhitePerspective(state);
   return state.turn === 'w' ? scoreFromWhite : -scoreFromWhite;
 }
 
 /**
- * Full master-grade HCE evaluation from White's perspective (+ = White advantage, - = Black advantage)
+ * Position evaluation from White's perspective (+ = White advantage, - = Black advantage).
+ * Strictly driven by Stockfish NNUE.
  */
 export function evaluateFromWhitePerspective(state: BoardState): number {
+  if (isNnueLoaded()) {
+    const nnue = evaluateNnue(state);
+    if (nnue !== null) {
+      return nnue;
+    }
+  }
   const { board } = state;
   const phase = getGamePhase(board); // 0 to 24
 
@@ -642,10 +637,10 @@ export function evaluateFromWhitePerspective(state: BoardState): number {
 }
 
 /**
- * Generates an in-depth breakdown of the HCE evaluation components
- * for UI inspection.
+ * Generates an in-depth breakdown of the position components
+ * for UI inspection with Stockfish NNUE evaluation.
  */
-export function getHceBreakdown(state: BoardState): HceBreakdown {
+export function getPositionBreakdown(state: BoardState): PositionBreakdown {
   const { board } = state;
   const phase = getGamePhase(board); // 0 to 24
   const phaseWeight = phase / 24;
@@ -832,10 +827,12 @@ export function getHceBreakdown(state: BoardState): HceBreakdown {
     if (r >= 3 && r <= 5 && f >= 2 && f <= 5) actB += 20;
   }
 
-  const total = evaluateFromWhitePerspective(state);
+  const nnue = isNnueLoaded() ? evaluateNnue(state) ?? undefined : undefined;
+  const total = nnue ?? evaluateFromWhitePerspective(state);
 
   return {
     total,
+    nnueScore: nnue ?? total,
     gamePhase: Number((phase / 24).toFixed(2)),
     material: { white: matW, black: matB, diff: matW - matB },
     pst: { white: pstW, black: pstB, diff: pstW - pstB },

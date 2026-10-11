@@ -16,6 +16,7 @@ import {
   moveToSAN,
 } from './chessRules';
 import { evaluateBoard, PIECE_VALUES } from './evaluation';
+import { evaluateNnue, isNnueLoaded } from './nnue';
 
 export const MATE_SCORE = 100000;
 
@@ -51,6 +52,35 @@ export class TypeScriptChessSearchEngine {
     this.historyTable = Array.from({ length: 2 }, () =>
       Array.from({ length: 64 }, () => Array(64).fill(0))
     );
+  }
+
+  private evaluatePosition(state: BoardState): number {
+    if (isNnueLoaded()) {
+      const score = evaluateNnue(state);
+      if (score !== null) {
+        // evaluateNnue returns score from White's perspective (+ = White advantage)
+        // Negamax search requires score from side-to-move perspective
+        return state.turn === 'w' ? score : -score;
+      }
+    }
+    return evaluateBoard(state);
+  }
+
+  /**
+   * Evaluates a position resolving all immediate tactical hanging captures (Quiescence).
+   * Prevents raw material spikes when a capture is made and a recapture is pending.
+   * Returns score from White's perspective (+ = White advantage).
+   */
+  public evaluateQuiescent(state: BoardState): number {
+    this.nodesVisited = 0;
+    this.startTime = Date.now();
+    this.timeLimitMs = 50; // Max 50ms cap for instant UI response
+    this.isAborted = false;
+
+    const inCheck = isKingInCheck(state.board, state.turn);
+    const score = this.quiescence(state, -MATE_SCORE, MATE_SCORE, 0);
+    // Convert negamax score to White perspective
+    return state.turn === 'w' ? score : -score;
   }
 
   public async search(
@@ -386,7 +416,7 @@ export class TypeScriptChessSearchEngine {
       if (useQuiescence) {
         return this.quiescence(state, alpha, beta, ply);
       }
-      return evaluateBoard(state);
+      return this.evaluatePosition(state);
     }
 
     // Draw by 50-move rule
@@ -500,7 +530,7 @@ export class TypeScriptChessSearchEngine {
     }
 
     const inCheck = isKingInCheck(state.board, state.turn);
-    const standPat = evaluateBoard(state);
+    const standPat = this.evaluatePosition(state);
 
     if (!inCheck) {
       if (standPat >= beta) return beta;

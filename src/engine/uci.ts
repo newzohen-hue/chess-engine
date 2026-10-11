@@ -22,8 +22,9 @@ import {
   squareToAlgebraic,
   toFEN,
 } from './chessRules';
-import { evaluateFromWhitePerspective, getHceBreakdown } from './evaluation';
+import { evaluateFromWhitePerspective, getPositionBreakdown } from './evaluation';
 import { WasmChessSearchEngine } from './wasmEngine';
+import { evaluateNnue, isNnueLoaded } from './nnue';
 
 export interface UciOutputHandler {
   onOutput: (line: string) => void;
@@ -126,7 +127,7 @@ export class UciEngine {
   }
 
   private handleUci() {
-    this.send('id name HCE Chess Engine (C/WASM)');
+    this.send('id name Stockfish NNUE Chess Engine');
     this.send('id author AI Studio & Open Source');
     this.send(`option name Hash type spin default 64 min 1 max 512`);
     this.send(`option name Quiescence type check default true`);
@@ -273,14 +274,15 @@ export class UciEngine {
   }
 
   private handleEval() {
-    const bd = getHceBreakdown(this.currentBoard);
+    const bd = getPositionBreakdown(this.currentBoard);
     const scoreWhite = evaluateFromWhitePerspective(this.currentBoard);
     const cpTurn = this.currentBoard.turn === 'w' ? scoreWhite : -scoreWhite;
 
-    this.send('=== Handcrafted Evaluation (HCE) ===');
+    this.send('=== Stockfish NNUE Neural Network Evaluation ===');
     this.send(
-      `Turn: ${this.currentBoard.turn === 'w' ? 'White' : 'Black'} | Total: ${scoreWhite > 0 ? '+' : ''}${(scoreWhite / 100).toFixed(2)} cp (Perspective: ${cpTurn > 0 ? '+' : ''}${(cpTurn / 100).toFixed(2)} cp)`
+      `Turn: ${this.currentBoard.turn === 'w' ? 'White' : 'Black'} | Total NNUE: ${scoreWhite > 0 ? '+' : ''}${(scoreWhite / 100).toFixed(2)} cp (Perspective: ${cpTurn > 0 ? '+' : ''}${(cpTurn / 100).toFixed(2)} cp)`
     );
+    this.send(`Architecture: HalfKAv2_hm (22528 -> 1024 -> 15 -> 32 -> 1)`);
     this.send(`Game Phase: ${bd.gamePhase} (${bd.gamePhase > 0.5 ? 'Midgame' : 'Endgame'})`);
     this.send(
       `Material:   White ${bd.material.white} | Black ${bd.material.black} | Diff: ${bd.material.diff > 0 ? '+' : ''}${bd.material.diff} cp`

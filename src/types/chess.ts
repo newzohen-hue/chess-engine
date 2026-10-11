@@ -42,20 +42,21 @@ export interface BoardState {
   fullmoveNumber: number;
 }
 
-export interface HceBreakdownComponent {
+export interface PositionComponent {
   white: number;
   black: number;
   diff: number; // white - black
 }
 
-export interface HceBreakdown {
+export interface PositionBreakdown {
   total: number; // In centipawns from White's perspective (+ = White advantage)
+  nnueScore: number; // Stockfish NNUE neural network evaluation (+ = White advantage)
   gamePhase: number; // 0 = Endgame, 1 = Midgame/Opening
-  material: HceBreakdownComponent;
-  pst: HceBreakdownComponent; // Piece-Square Table
-  pawns: HceBreakdownComponent; // Passed, isolated, doubled
-  kingSafety: HceBreakdownComponent; // Pawn shield, open files
-  activity: HceBreakdownComponent; // Bishop pair, rooks on open files, mobility
+  material: PositionComponent;
+  pst: PositionComponent; // Positional piece activity
+  pawns: PositionComponent; // Pawn structure
+  kingSafety: PositionComponent; // King safety
+  activity: PositionComponent; // Piece mobility and coordination
 }
 
 export interface SearchStats {
@@ -65,6 +66,7 @@ export interface SearchStats {
   timeMs: number;
   nps: number;
   score: number; // centipawns or mate value from White's perspective
+  nnueScore?: number; // Stockfish NNUE raw neural network evaluation
   isMate?: boolean;
   mateIn?: number;
   bestMove: Move | null;
@@ -143,6 +145,6 @@ export const SKILL_CONFIGS: Record<EngineSkillLevel, SkillConfig> = {
     timeMs: 2200,
     useBook: true,
     useQuiescence: true,
-    description: 'Максимальная глубина (9+), глубокий перебор вариантов, HCE эндшпиль и GM-книга.',
+    description: 'Максимальная глубина (9+), глубокий перебор вариантов, нейросетевая оценка NNUE и GM-книга.',
   },
 };

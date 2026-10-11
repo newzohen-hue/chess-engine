@@ -14,6 +14,7 @@ import {
   MoveClassification,
   SKILL_CONFIGS,
   SearchStats,
+  SearchStrategy,
 } from './types/chess';
 import {
   cloneBoard,
@@ -28,6 +29,7 @@ import {
   toFEN,
 } from './engine/chessRules';
 import { getHceBreakdown } from './engine/evaluation';
+import { loadNnueModel } from './engine/nnue';
 import { WasmChessSearchEngine } from './engine/wasmEngine';
 import { UciEngine } from './engine/uci';
 import { isSoundEnabled, playMoveSound, setSoundEnabled } from './engine/audio';
@@ -79,6 +81,7 @@ export default function App() {
 
   // Engine Skill & Configuration
   const [skillLevel, setSkillLevel] = useState<EngineSkillLevel>('master');
+  const [searchStrategy, setSearchStrategy] = useState<SearchStrategy>('nnue');
   const [maxDepth, setMaxDepth] = useState<number>(8);
   const [timeLimitMs, setTimeLimitMs] = useState<number>(1500);
   const [useQuiescence, setUseQuiescence] = useState<boolean>(true);
@@ -156,6 +159,21 @@ export default function App() {
     : stateSnapshots;
   const gameStatus = getGameStatus(displayedState, activeSnapshots);
 
+  // Preload Stockfish NNUE model in background on startup
+  useEffect(() => {
+    loadNnueModel().then((model) => {
+      if (model) {
+        // Refresh breakdown with NNUE evaluation
+        try {
+          const bd = getHceBreakdown(boardStateRef.current);
+          setBreakdown(bd);
+        } catch {
+          // ignore
+        }
+      }
+    });
+  }, []);
+
   // Update HCE breakdown whenever displayed board changes
   useEffect(() => {
     try {
@@ -196,9 +214,11 @@ export default function App() {
 
     const next = makeMove(current, moveWithSan);
 
-    // Evaluate position after move for move quality classification
+    // Evaluate position after move resolving tactical recaptures (Quiescence)
+    // Prevents score jumping erratically after trade sequences (e.g. QxQ before QxQ recapture)
+    const quiescentScore = wasmEngineRef.current.evaluateQuiescent(next, searchStrategy);
     const evalBd = getHceBreakdown(next);
-    moveWithSan.evalAfter = evalBd.total;
+    moveWithSan.evalAfter = quiescentScore;
 
     // Sound effects
     if (isKingInCheck(next.board, next.turn)) {
@@ -216,12 +236,12 @@ export default function App() {
     boardStateRef.current = next;
     uciEngineRef.current.setBoard(next);
 
-    // Keep last search metrics visible while updating score to current position
+    // Keep last search metrics visible while smoothly updating score with quiescent position score
     setSearchStats((prev) => {
       if (!prev) return null;
       return {
         ...prev,
-        score: evalBd.total,
+        score: quiescentScore,
         isBookMove: false,
       };
     });
@@ -298,6 +318,7 @@ export default function App() {
             maxDepth,
             timeLimitMs,
             useQuiescence,
+            strategy: searchStrategy,
           },
           (progress) => {
             setSearchStats(progress);
@@ -315,7 +336,7 @@ export default function App() {
         setIsSearching(false);
       }
     },
-    [maxDepth, timeLimitMs, useQuiescence, useOpeningBook, history, executeMove, getGameStatus]
+    [maxDepth, timeLimitMs, useQuiescence, useOpeningBook, searchStrategy, history, executeMove, getGameStatus]
   );
 
   // Background analysis when in Analysis mode or waiting for player
@@ -329,6 +350,7 @@ export default function App() {
             maxDepth: Math.min(6, maxDepth),
             timeLimitMs: Math.min(1200, timeLimitMs === 0 ? 1000 : timeLimitMs),
             useQuiescence,
+            strategy: searchStrategy,
           },
           (progress) => {
             setSearchStats(progress);
@@ -341,7 +363,7 @@ export default function App() {
         setIsSearching(false);
       }
     },
-    [maxDepth, timeLimitMs, useQuiescence]
+    [maxDepth, timeLimitMs, useQuiescence, searchStrategy]
   );
 
   // Request Tactical Hint for Player
@@ -366,6 +388,7 @@ export default function App() {
         maxDepth: Math.min(6, maxDepth),
         timeLimitMs: 800,
         useQuiescence: true,
+        strategy: searchStrategy,
       });
 
       if (result.bestMove) {
@@ -797,6 +820,8 @@ export default function App() {
             onToggleQuiescence={() => setUseQuiescence((prev) => !prev)}
             skillLevel={skillLevel}
             onSkillLevelChange={handleSkillLevelChange}
+            searchStrategy={searchStrategy}
+            onSearchStrategyChange={setSearchStrategy}
             useOpeningBook={useOpeningBook}
             onToggleOpeningBook={() => setUseOpeningBook((prev) => !prev)}
             currentOpening={currentOpening}
