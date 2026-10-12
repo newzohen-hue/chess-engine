@@ -1,50 +1,34 @@
 import React, { useState } from 'react';
-import {
-  EngineSkillLevel,
-  HceBreakdown,
-  SKILL_CONFIGS,
-  SearchStats,
-  SearchStrategy,
-} from '../types/chess';
+import { PositionBreakdown, SearchStats } from '../types/chess';
 import { BenchmarkSuiteResult, runWasmEngineBenchmark } from '../engine/benchmark';
-import { TacticalThreat } from '../engine/threats';
 import {
   Cpu,
   Layers,
-  Shield,
   Sparkles,
   ChevronDown,
   ChevronUp,
   Zap,
   Gauge,
-  Database,
-  PlayCircle,
   Loader2,
   BookOpen,
-  AlertTriangle,
   Lightbulb,
-  Award,
   Binary,
+  TrendingUp,
 } from 'lucide-react';
 
 interface EngineDashboardProps {
   stats: SearchStats | null;
-  breakdown: HceBreakdown | null;
+  breakdown: PositionBreakdown | null;
   isSearching: boolean;
   maxDepth: number;
   onMaxDepthChange: (depth: number) => void;
-  timeLimitMs: number;
-  onTimeLimitChange: (ms: number) => void;
+  fixedTimeMs: number;
+  onFixedTimeMsChange: (ms: number) => void;
   useQuiescence: boolean;
   onToggleQuiescence: () => void;
-  skillLevel: EngineSkillLevel;
-  onSkillLevelChange: (level: EngineSkillLevel) => void;
-  searchStrategy: SearchStrategy;
-  onSearchStrategyChange: (strategy: SearchStrategy) => void;
   useOpeningBook: boolean;
   onToggleOpeningBook: () => void;
   currentOpening?: { eco: string; name: string; nameRu: string } | null;
-  threats?: TacticalThreat[];
   activeHint?: string | null;
   onClearHint?: () => void;
 }
@@ -55,18 +39,13 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
   isSearching,
   maxDepth,
   onMaxDepthChange,
-  timeLimitMs,
-  onTimeLimitChange,
+  fixedTimeMs,
+  onFixedTimeMsChange,
   useQuiescence,
   onToggleQuiescence,
-  skillLevel,
-  onSkillLevelChange,
-  searchStrategy,
-  onSearchStrategyChange,
   useOpeningBook,
   onToggleOpeningBook,
   currentOpening,
-  threats = [],
   activeHint,
   onClearHint,
 }) => {
@@ -118,28 +97,22 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
           <div>
             <h3 className="text-sm font-semibold tracking-tight text-white flex items-center gap-2">
               Шахматный движок
-              <span
-                className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border font-bold ${
-                  searchStrategy === 'nnue'
-                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                    : 'bg-blue-500/20 text-blue-300 border-blue-500/40'
-                }`}
-              >
-                {searchStrategy === 'nnue' ? '🧠 NNUE (Нейросеть)' : '⚡ HCE (C / WASM)'}
+              <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded border font-bold bg-emerald-500/20 text-emerald-300 border-emerald-500/40">
+                🧠 Stockfish NNUE • 2800+ ELO
               </span>
             </h3>
             <p className="text-xs text-slate-400">
               {isSearching ? (
                 <span className="text-emerald-400 flex items-center gap-1 font-medium">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
-                  Поиск лучшего хода...
+                  Нейросетевой расчёт на полную силу...
                 </span>
               ) : stats?.isBookMove ? (
                 <span className="text-sky-300 font-medium flex items-center gap-1">
                   <BookOpen className="w-3 h-3" /> Ход по дебютной книге GM
                 </span>
               ) : (
-                'Ожидание хода'
+                'Полная сила игры (всегда максимальный расчёт)'
               )}
             </p>
           </div>
@@ -149,7 +122,7 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
         <div className="flex flex-col items-end">
           <span className="text-[10px] uppercase text-slate-500 font-semibold tracking-wider flex items-center gap-1">
             <span>Оценка</span>
-            <span className="text-emerald-400 font-mono">({searchStrategy === 'nnue' ? 'NNUE' : 'HCE'})</span>
+            <span className="text-emerald-400 font-mono">(NNUE)</span>
           </span>
           <span
             className={`text-lg font-mono font-bold ${
@@ -167,85 +140,18 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
         </div>
       </div>
 
-      {/* Dual Search Strategy Selector (NNUE vs HCE) */}
-      <div className="flex flex-col gap-1.5 bg-slate-950/80 p-2.5 rounded-lg border border-slate-800">
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-semibold text-slate-300 flex items-center gap-1.5">
-            <Zap className="w-3.5 h-3.5 text-amber-400" />
-            <span>Стратегия поиска (Оценка позиции):</span>
-          </span>
-          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded border font-bold bg-slate-800 text-slate-300 border-slate-700">
-            {searchStrategy === 'nnue' ? '🧠 Neural Net' : '📐 PeSTO + Handcrafted'}
-          </span>
+      {/* Engine Full Strength Status Badge */}
+      <div className="flex items-center justify-between bg-slate-950/70 p-2.5 rounded-lg border border-slate-800 text-xs">
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-amber-400 shrink-0" />
+          <div>
+            <span className="font-semibold text-white">Режим игры: </span>
+            <span className="text-slate-300">Всегда на полную силу (без ослабления)</span>
+          </div>
         </div>
-
-        <div className="grid grid-cols-2 gap-2 mt-1">
-          <button
-            type="button"
-            onClick={() => onSearchStrategyChange('nnue')}
-            className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
-              searchStrategy === 'nnue'
-                ? 'bg-gradient-to-r from-emerald-600 to-teal-600 border-emerald-400 text-white shadow-lg shadow-emerald-950/50'
-                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-emerald-300" />
-            <div className="flex flex-col items-start leading-tight">
-              <span>NNUE Нейросеть</span>
-              <span className="text-[10px] opacity-75 font-normal">Stockfish HalfKAv2</span>
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onSearchStrategyChange('hce')}
-            className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
-              searchStrategy === 'hce'
-                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 border-blue-400 text-white shadow-lg shadow-blue-950/50'
-                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80'
-            }`}
-          >
-            <Binary className="w-4 h-4 text-blue-300" />
-            <div className="flex flex-col items-start leading-tight">
-              <span>HCE Классика</span>
-              <span className="text-[10px] opacity-75 font-normal">C / WASM + PeSTO</span>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      {/* Skill Level Selector Tabs */}
-      <div className="flex flex-col gap-1.5 bg-slate-950/70 p-2 rounded-lg border border-slate-800/80">
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-semibold text-slate-400 flex items-center gap-1">
-            <Award className="w-3.5 h-3.5 text-amber-400" />
-            <span>Уровень силы движка:</span>
-          </span>
-          <span className="text-[11px] font-mono text-emerald-400 font-semibold">
-            {SKILL_CONFIGS[skillLevel].nameRu}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-4 gap-1">
-          {(['beginner', 'intermediate', 'club', 'master'] as EngineSkillLevel[]).map((lvl) => {
-            const cfg = SKILL_CONFIGS[lvl];
-            const isSelected = skillLevel === lvl;
-            return (
-              <button
-                key={lvl}
-                onClick={() => onSkillLevelChange(lvl)}
-                className={`py-1 px-1.5 rounded text-[11px] font-medium transition-colors cursor-pointer text-center truncate ${
-                  isSelected
-                    ? 'bg-emerald-600 text-white font-bold shadow'
-                    : 'bg-slate-800/80 text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-                title={cfg.description}
-              >
-                {cfg.name}
-              </button>
-            );
-          })}
-        </div>
+        <span className="text-[11px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 font-semibold">
+          Stockfish 19 TM
+        </span>
       </div>
 
       {/* Active Hint Banner if requested */}
@@ -266,14 +172,6 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
               ✕
             </button>
           )}
-        </div>
-      )}
-
-      {/* Active Tactical Threats Alert if any */}
-      {threats.length > 0 && (
-        <div className="flex items-center gap-2 p-2 rounded-lg bg-rose-950/40 border border-rose-500/30 text-xs text-rose-300 animate-pulse">
-          <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-          <span className="truncate">{threats[0].description}</span>
         </div>
       )}
 
@@ -330,17 +228,19 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
         <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
           <span className="flex items-center gap-1.5">
             <Gauge className="w-3.5 h-3.5 text-blue-400" />
-            <span>Параметры поиска:</span>
+            <span>Параметры расчёта:</span>
           </span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
           <div>
-            <label className="text-[11px] text-slate-400 block mb-1">Глубина (макс. {maxDepth})</label>
+            <label className="text-[11px] text-slate-400 block mb-1">
+              Макс. глубина: <span className="text-white font-mono font-bold">{maxDepth}</span>
+            </label>
             <input
               type="range"
-              min="1"
-              max="12"
+              min="4"
+              max="16"
               value={maxDepth}
               onChange={(e) => onMaxDepthChange(parseInt(e.target.value, 10))}
               className="w-full accent-emerald-500 cursor-pointer"
@@ -349,20 +249,18 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
 
           <div>
             <label className="text-[11px] text-slate-400 block mb-1">
-              Лимит времени: {timeLimitMs === 0 ? 'Без лимита' : `${timeLimitMs / 1000}s`}
+              Фикс. время (без часов):
             </label>
             <select
-              value={timeLimitMs}
-              onChange={(e) => onTimeLimitChange(parseInt(e.target.value, 10))}
+              value={fixedTimeMs}
+              onChange={(e) => onFixedTimeMsChange(parseInt(e.target.value, 10))}
               className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 text-xs focus:outline-none"
             >
-              <option value={400}>0.4 сек</option>
-              <option value={700}>0.7 сек</option>
-              <option value={1000}>1.0 сек</option>
-              <option value={1500}>1.5 сек</option>
-              <option value={2200}>2.2 сек</option>
-              <option value={3500}>3.5 сек</option>
-              <option value={0}>Без лимита</option>
+              <option value={800}>0.8 сек</option>
+              <option value={1500}>1.5 сек (стандарт)</option>
+              <option value={2000}>2.0 сек</option>
+              <option value={3000}>3.0 сек (глубокий)</option>
+              <option value={5000}>5.0 сек (макс)</option>
             </select>
           </div>
 
@@ -391,7 +289,7 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
         </div>
       </div>
 
-      {/* Detailed HCE Evaluation Breakdown */}
+      {/* Detailed Position & Neural Network Evaluation Breakdown (Pure NNUE) */}
       {breakdown && (
         <div className="border border-slate-800 bg-slate-950/50 rounded-lg overflow-hidden">
           <button
@@ -400,7 +298,7 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
           >
             <span className="flex items-center gap-1.5">
               <Layers className="w-4 h-4 text-emerald-400" />
-              <span>Детальный разбор HCE компонентов</span>
+              <span>Детальный анализ позиции (NNUE)</span>
             </span>
             <span className="flex items-center gap-2 text-slate-500">
               <span className="text-[10px] font-mono">
@@ -412,49 +310,57 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
 
           {showBreakdown && (
             <div className="p-3 pt-1 border-t border-slate-800/60 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-              <div className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800">
-                <span className="text-slate-400">Материал:</span>
-                <span className="font-mono font-bold text-slate-200">
-                  {breakdown.material.diff > 0 ? '+' : ''}{breakdown.material.diff} cp
+              {/* NNUE Evaluation */}
+              <div className="flex items-center justify-between p-2 rounded bg-emerald-950/40 border border-emerald-500/30">
+                <span className="text-emerald-300 font-medium flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" /> Оценка нейросети (NNUE):
+                </span>
+                <span className="font-mono font-bold text-emerald-200">
+                  {breakdown.nnueScore > 0 ? '+' : ''}{(breakdown.nnueScore / 100).toFixed(2)} ({breakdown.nnueScore} cp)
                 </span>
               </div>
 
-              {breakdown.nnueScore !== undefined && (
-                <div className="flex items-center justify-between p-1.5 rounded bg-emerald-950/40 border border-emerald-500/30">
-                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-emerald-400" /> Нейросеть NNUE:
-                  </span>
-                  <span className="font-mono font-bold text-emerald-300">
-                    {breakdown.nnueScore > 0 ? '+' : ''}{breakdown.nnueScore} cp
+              {/* Win Probability (Stockfish WDL Model) */}
+              <div className="flex items-center justify-between p-2 rounded bg-slate-900/80 border border-slate-800">
+                <span className="text-slate-400 flex items-center gap-1.5">
+                  <TrendingUp className="w-3.5 h-3.5 text-sky-400" /> Вероятность победы белых:
+                </span>
+                <span className="font-mono font-bold text-sky-300">
+                  {breakdown.winProbabilityWhite}%
+                </span>
+              </div>
+
+              {/* Piece Inventory on Board */}
+              <div className="p-2 rounded bg-slate-900/80 border border-slate-800 sm:col-span-2">
+                <div className="flex items-center justify-between mb-1.5 text-slate-400">
+                  <span>Фактический баланс фигур на доске:</span>
+                  <span className="font-mono font-bold text-white">
+                    {breakdown.materialBalance > 0 ? `+${breakdown.materialBalance} пешки белым` : breakdown.materialBalance < 0 ? `${breakdown.materialBalance} пешки чёрным` : 'Равновесие (0)'}
                   </span>
                 </div>
-              )}
-
-              <div className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800">
-                <span className="text-slate-400">Таблицы PST (PeSTO):</span>
-                <span className="font-mono font-bold text-slate-200">
-                  {breakdown.pst.diff > 0 ? '+' : ''}{breakdown.pst.diff} cp
-                </span>
+                <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
+                  <div className="bg-slate-950/60 p-1.5 rounded text-slate-300 flex items-center justify-between">
+                    <span>Белые:</span>
+                    <span>
+                      ♙{breakdown.whitePieces.p} ♘{breakdown.whitePieces.n} ♗{breakdown.whitePieces.b} ♖{breakdown.whitePieces.r} ♕{breakdown.whitePieces.q}
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/60 p-1.5 rounded text-slate-300 flex items-center justify-between">
+                    <span>Чёрные:</span>
+                    <span>
+                      ♟{breakdown.blackPieces.p} ♞{breakdown.blackPieces.n} ♝{breakdown.blackPieces.b} ♜{breakdown.blackPieces.r} ♛{breakdown.blackPieces.q}
+                    </span>
+                  </div>
+                </div>
               </div>
 
-              <div className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800">
-                <span className="text-slate-400">Пешечная структура:</span>
-                <span className="font-mono font-bold text-slate-200">
-                  {breakdown.pawns.diff > 0 ? '+' : ''}{breakdown.pawns.diff} cp
+              {/* Network Architecture Details */}
+              <div className="p-2 rounded bg-slate-900/80 border border-slate-800 sm:col-span-2 flex items-center justify-between text-[11px] text-slate-400">
+                <span className="flex items-center gap-1.5">
+                  <Binary className="w-3.5 h-3.5 text-emerald-400" /> Архитектура:
                 </span>
-              </div>
-
-              <div className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800">
-                <span className="text-slate-400">Безопасность короля:</span>
-                <span className="font-mono font-bold text-slate-200">
-                  {breakdown.kingSafety.diff > 0 ? '+' : ''}{breakdown.kingSafety.diff} cp
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between p-1.5 rounded bg-slate-900/80 border border-slate-800 sm:col-span-2">
-                <span className="text-slate-400">Активность фигур (ладьи, слоны, форпосты):</span>
-                <span className="font-mono font-bold text-slate-200">
-                  {breakdown.activity.diff > 0 ? '+' : ''}{breakdown.activity.diff} cp
+                <span className="font-mono text-slate-300">
+                  Stockfish HalfKAv2_hm (2x1024 → 16 → 32 → 1) • Квантование INT8
                 </span>
               </div>
             </div>

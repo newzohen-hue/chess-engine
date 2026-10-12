@@ -1,5 +1,5 @@
 /**
- * Universal Chess Interface (UCI) Protocol Implementation for HCE Chess Engine.
+ * Universal Chess Interface (UCI) Protocol Implementation for Stockfish NNUE Chess Engine.
  * Supports standard UCI commands:
  * - uci
  * - isready
@@ -282,24 +282,17 @@ export class UciEngine {
     this.send(
       `Turn: ${this.currentBoard.turn === 'w' ? 'White' : 'Black'} | Total NNUE: ${scoreWhite > 0 ? '+' : ''}${(scoreWhite / 100).toFixed(2)} cp (Perspective: ${cpTurn > 0 ? '+' : ''}${(cpTurn / 100).toFixed(2)} cp)`
     );
-    this.send(`Architecture: HalfKAv2_hm (22528 -> 1024 -> 15 -> 32 -> 1)`);
+    this.send(`Architecture: Stockfish NNUE HalfKAv2_hm (22528 -> 1024 -> 16 -> 32 -> 1)`);
     this.send(`Game Phase: ${bd.gamePhase} (${bd.gamePhase > 0.5 ? 'Midgame' : 'Endgame'})`);
     this.send(
-      `Material:   White ${bd.material.white} | Black ${bd.material.black} | Diff: ${bd.material.diff > 0 ? '+' : ''}${bd.material.diff} cp`
+      `White Pieces: P:${bd.whitePieces.p} N:${bd.whitePieces.n} B:${bd.whitePieces.b} R:${bd.whitePieces.r} Q:${bd.whitePieces.q}`
     );
     this.send(
-      `PST:        White ${bd.pst.white} | Black ${bd.pst.black} | Diff: ${bd.pst.diff > 0 ? '+' : ''}${bd.pst.diff} cp`
+      `Black Pieces: P:${bd.blackPieces.p} N:${bd.blackPieces.n} B:${bd.blackPieces.b} R:${bd.blackPieces.r} Q:${bd.blackPieces.q}`
     );
-    this.send(
-      `Pawns:      White ${bd.pawns.white} | Black ${bd.pawns.black} | Diff: ${bd.pawns.diff > 0 ? '+' : ''}${bd.pawns.diff} cp`
-    );
-    this.send(
-      `KingSafety: White ${bd.kingSafety.white} | Black ${bd.kingSafety.black} | Diff: ${bd.kingSafety.diff > 0 ? '+' : ''}${bd.kingSafety.diff} cp`
-    );
-    this.send(
-      `Activity:   White ${bd.activity.white} | Black ${bd.activity.black} | Diff: ${bd.activity.diff > 0 ? '+' : ''}${bd.activity.diff} cp`
-    );
-    this.send('====================================');
+    this.send(`Material Delta: ${bd.materialBalance > 0 ? '+' : ''}${bd.materialBalance} pawns`);
+    this.send(`Win Probability (White): ${bd.winProbabilityWhite.toFixed(1)}%`);
+    this.send('================================================');
   }
 
   private handleDisplay() {

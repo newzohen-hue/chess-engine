@@ -42,21 +42,23 @@ export interface BoardState {
   fullmoveNumber: number;
 }
 
-export interface PositionComponent {
-  white: number;
-  black: number;
-  diff: number; // white - black
+export interface PreMove {
+  from: number;
+  to: number;
+  piece: PieceType;
+  color: Color;
+  promotion?: PieceType;
 }
 
 export interface PositionBreakdown {
   total: number; // In centipawns from White's perspective (+ = White advantage)
   nnueScore: number; // Stockfish NNUE neural network evaluation (+ = White advantage)
   gamePhase: number; // 0 = Endgame, 1 = Midgame/Opening
-  material: PositionComponent;
-  pst: PositionComponent; // Positional piece activity
-  pawns: PositionComponent; // Pawn structure
-  kingSafety: PositionComponent; // King safety
-  activity: PositionComponent; // Piece mobility and coordination
+  evalPerspective: 'w' | 'b'; // Side to move
+  whitePieces: Record<PieceType, number>;
+  blackPieces: Record<PieceType, number>;
+  materialBalance: number; // Material delta in pawns (+ = White advantage)
+  winProbabilityWhite: number; // Percentage 0 - 100
 }
 
 export interface SearchStats {
@@ -85,7 +87,9 @@ export type GameStatus =
   | 'stalemate'
   | 'draw-fifty-move'
   | 'draw-threefold'
-  | 'draw-insufficient-material';
+  | 'draw-insufficient-material'
+  | 'timeout-white'
+  | 'timeout-black';
 
 export type GameMode =
   | 'player-vs-engine-white'
@@ -93,58 +97,3 @@ export type GameMode =
   | 'two-player-analysis'
   | 'engine-vs-engine';
 
-export type EngineSkillLevel = 'beginner' | 'intermediate' | 'club' | 'master';
-
-export interface SkillConfig {
-  name: string;
-  nameRu: string;
-  elo: number;
-  depth: number;
-  timeMs: number;
-  useBook: boolean;
-  useQuiescence: boolean;
-  description: string;
-}
-
-export const SKILL_CONFIGS: Record<EngineSkillLevel, SkillConfig> = {
-  beginner: {
-    name: 'Beginner',
-    nameRu: 'Новичок (~1100 ELO)',
-    elo: 1100,
-    depth: 3,
-    timeMs: 400,
-    useBook: false,
-    useQuiescence: true,
-    description: 'Лёгкий уровень: базовый расчёт на 3 полухода с проверкой взятий.',
-  },
-  intermediate: {
-    name: 'Casual Player',
-    nameRu: 'Любитель (~1500 ELO)',
-    elo: 1500,
-    depth: 5,
-    timeMs: 700,
-    useBook: true,
-    useQuiescence: true,
-    description: 'Уверенная тактическая игра, базовые дебюты и форсированные взятия.',
-  },
-  club: {
-    name: 'Club Player',
-    nameRu: 'Клубный (~1900 ELO)',
-    elo: 1900,
-    depth: 7,
-    timeMs: 1400,
-    useBook: true,
-    useQuiescence: true,
-    description: 'Сильная позиционная игра, классическая дебютная теория и поиск на 7 полуходов.',
-  },
-  master: {
-    name: 'Grandmaster',
-    nameRu: 'Гроссмейстер (2400+ ELO)',
-    elo: 2400,
-    depth: 9,
-    timeMs: 2200,
-    useBook: true,
-    useQuiescence: true,
-    description: 'Максимальная глубина (9+), глубокий перебор вариантов, нейросетевая оценка NNUE и GM-книга.',
-  },
-};

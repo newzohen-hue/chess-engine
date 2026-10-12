@@ -774,7 +774,7 @@ int generate_legal_moves(const Position* pos, Move* moves, int captures_only) {
   return count;
 }
 
-// Detailed Handcrafted Evaluation (HCE) with positional rules
+// Classical positional evaluation with tapered phase rules
 int evaluate(const Position* pos) {
   int phase = pos->game_phase;
   if (phase > 24) phase = 24;

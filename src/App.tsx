@@ -1,23 +1,16 @@
-/**
- * Main Chess Application with HCE Engine, GM Opening Book, Eval Bar, UCI Support & Tactical Analysis.
- */
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   BoardState,
   Color,
-  EngineSkillLevel,
   GameMode,
   GameStatus,
-  HceBreakdown,
   Move,
-  MoveClassification,
-  SKILL_CONFIGS,
+  PieceType,
+  PositionBreakdown,
+  PreMove,
   SearchStats,
-  SearchStrategy,
 } from './types/chess';
 import {
-  cloneBoard,
   generateLegalMoves,
   getPositionKey,
   hasInsufficientMaterial,
@@ -25,17 +18,24 @@ import {
   makeMove,
   moveToSAN,
   parseFEN,
+  squareToAlgebraic,
   START_FEN,
   toFEN,
 } from './engine/chessRules';
-import { getHceBreakdown } from './engine/evaluation';
+import { getPositionBreakdown } from './engine/evaluation';
 import { loadNnueModel } from './engine/nnue';
 import { WasmChessSearchEngine } from './engine/wasmEngine';
 import { UciEngine } from './engine/uci';
-import { isSoundEnabled, playMoveSound, setSoundEnabled } from './engine/audio';
+import { playMoveSound, setSoundEnabled } from './engine/audio';
 import { getBookMove, identifyOpening } from './engine/openingBook';
-import { detectThreats, explainMove, TacticalThreat } from './engine/threats';
+import { explainMove } from './engine/threats';
 import { isTheoreticalDraw } from './engine/endgame';
+import {
+  TimeControlConfig,
+  TIME_PRESETS,
+  calculateEngineMoveTime,
+  formatClockTime,
+} from './engine/timeManagement';
 import { Chessboard } from './components/Chessboard';
 import { EvalBar } from './components/EvalBar';
 import { EngineDashboard } from './components/EngineDashboard';
@@ -57,7 +57,8 @@ import {
   Columns,
   Undo2,
   Lightbulb,
-  AlertTriangle,
+  Clock,
+  Zap,
 } from 'lucide-react';
 
 export default function App() {
@@ -79,18 +80,27 @@ export default function App() {
   const [soundOn, setSoundOn] = useState<boolean>(true);
   const [evalBarPosition, setEvalBarPosition] = useState<'left' | 'right' | 'hidden'>('left');
 
-  // Engine Skill & Configuration
-  const [skillLevel, setSkillLevel] = useState<EngineSkillLevel>('master');
-  const [searchStrategy, setSearchStrategy] = useState<SearchStrategy>('nnue');
-  const [maxDepth, setMaxDepth] = useState<number>(8);
-  const [timeLimitMs, setTimeLimitMs] = useState<number>(1500);
+  // Time Management (Stockfish 19 Clocks & Time Controls)
+  const [timeControl, setTimeControl] = useState<TimeControlConfig>(() => TIME_PRESETS[3]); // 3+2 Blitz default
+  const [whiteTimeMs, setWhiteTimeMs] = useState<number>(() => TIME_PRESETS[3].initialSeconds * 1000);
+  const [blackTimeMs, setBlackTimeMs] = useState<number>(() => TIME_PRESETS[3].initialSeconds * 1000);
+  const [timeoutStatus, setTimeoutStatus] = useState<'timeout-white' | 'timeout-black' | null>(null);
+
+  // Pre-moves (Предходы)
+  const [preMove, setPreMove] = useState<PreMove | null>(null);
+  const preMoveRef = useRef<PreMove | null>(null);
+  preMoveRef.current = preMove;
+
+  // Engine Configuration (Always Full Strength NNUE)
+  const [maxDepth, setMaxDepth] = useState<number>(12);
+  const [fixedTimeMs, setFixedTimeMs] = useState<number>(1500); // Fixed search time when untimed
   const [useQuiescence, setUseQuiescence] = useState<boolean>(true);
   const [useOpeningBook, setUseOpeningBook] = useState<boolean>(true);
 
   // Engine State
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [searchStats, setSearchStats] = useState<SearchStats | null>(null);
-  const [breakdown, setBreakdown] = useState<HceBreakdown | null>(null);
+  const [breakdown, setBreakdown] = useState<PositionBreakdown | null>(null);
 
   // Tactical Analysis & Hints
   const [hintMove, setHintMove] = useState<Move | null>(null);
@@ -113,13 +123,26 @@ export default function App() {
   // Identify current opening from history
   const currentOpening = identifyOpening(history);
 
-  // Tactical threats on displayed position
-  const threats: TacticalThreat[] = detectThreats(displayedState);
-  const threatSquares = threats.map((t) => t.targetSquare);
+  // Player color based on game mode
+  const playerColor: Color | null =
+    gameMode === 'player-vs-engine-white'
+      ? 'w'
+      : gameMode === 'player-vs-engine-black'
+      ? 'b'
+      : null;
+
+  // Can player set a premove?
+  const canPreMove =
+    (gameMode === 'player-vs-engine-white' && (boardState.turn === 'b' || isSearching)) ||
+    (gameMode === 'player-vs-engine-black' && (boardState.turn === 'w' || isSearching));
 
   // Determine Game Status with Threefold Repetition & Theoretical Endgame Draws
   const getGameStatus = useCallback(
     (state: BoardState, snapshots: BoardState[] = stateSnapshots): GameStatus => {
+      if (timeoutStatus) {
+        return timeoutStatus;
+      }
+
       const legalMoves = generateLegalMoves(state);
       const inCheck = isKingInCheck(state.board, state.turn);
 
@@ -136,7 +159,7 @@ export default function App() {
         return 'draw-insufficient-material';
       }
 
-      // Threefold repetition detection: check canonical position keys in history
+      // Threefold repetition detection
       const currentKey = getPositionKey(state);
       let repetitionCount = 0;
       for (const snap of snapshots) {
@@ -150,7 +173,7 @@ export default function App() {
 
       return inCheck ? 'check' : 'ongoing';
     },
-    [stateSnapshots]
+    [stateSnapshots, timeoutStatus]
   );
 
   // Active game status for the displayed board
@@ -159,13 +182,50 @@ export default function App() {
     : stateSnapshots;
   const gameStatus = getGameStatus(displayedState, activeSnapshots);
 
+  // Clock Countdown Timer Effect (SF 19 Clocks)
+  useEffect(() => {
+    if (timeControl.initialSeconds <= 0) return;
+    if (gameStatus !== 'ongoing' && gameStatus !== 'check') return;
+    if (history.length === 0) return; // Clocks start when first move is made
+
+    const interval = setInterval(() => {
+      const turn = boardStateRef.current.turn;
+      if (turn === 'w') {
+        setWhiteTimeMs((prev) => {
+          if (prev <= 100) {
+            // White flagged
+            wasmEngineRef.current.stop();
+            setIsSearching(false);
+            playMoveSound('gameover');
+            setTimeoutStatus('timeout-white');
+            return 0;
+          }
+          return prev - 100;
+        });
+      } else {
+        setBlackTimeMs((prev) => {
+          if (prev <= 100) {
+            // Black flagged
+            wasmEngineRef.current.stop();
+            setIsSearching(false);
+            playMoveSound('gameover');
+            setTimeoutStatus('timeout-black');
+            return 0;
+          }
+          return prev - 100;
+        });
+      }
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [timeControl, gameStatus, history.length]);
+
   // Preload Stockfish NNUE model in background on startup
   useEffect(() => {
     loadNnueModel().then((model) => {
       if (model) {
-        // Refresh breakdown with NNUE evaluation
         try {
-          const bd = getHceBreakdown(boardStateRef.current);
+          const bd = getPositionBreakdown(boardStateRef.current);
           setBreakdown(bd);
         } catch {
           // ignore
@@ -174,13 +234,13 @@ export default function App() {
     });
   }, []);
 
-  // Update HCE breakdown whenever displayed board changes
+  // Update position breakdown whenever displayed board changes
   useEffect(() => {
     try {
-      const bd = getHceBreakdown(displayedState);
+      const bd = getPositionBreakdown(displayedState);
       setBreakdown(bd);
     } catch (e) {
-      console.error('Failed to compute HCE breakdown', e);
+      console.error('Failed to compute position breakdown', e);
     }
   }, [displayedState]);
 
@@ -214,10 +274,17 @@ export default function App() {
 
     const next = makeMove(current, moveWithSan);
 
+    // Add clock increment to side that just moved
+    if (timeControl.initialSeconds > 0 && timeControl.incrementSeconds > 0) {
+      if (current.turn === 'w') {
+        setWhiteTimeMs((prev) => prev + timeControl.incrementSeconds * 1000);
+      } else {
+        setBlackTimeMs((prev) => prev + timeControl.incrementSeconds * 1000);
+      }
+    }
+
     // Evaluate position after move resolving tactical recaptures (Quiescence)
-    // Prevents score jumping erratically after trade sequences (e.g. QxQ before QxQ recapture)
-    const quiescentScore = wasmEngineRef.current.evaluateQuiescent(next, searchStrategy);
-    const evalBd = getHceBreakdown(next);
+    const quiescentScore = wasmEngineRef.current.evaluateQuiescent(next);
     moveWithSan.evalAfter = quiescentScore;
 
     // Sound effects
@@ -247,7 +314,6 @@ export default function App() {
     });
 
     setHistory((prevHist) => {
-      // Guard against duplicate push of the exact same move
       if (prevHist.length > 0) {
         const last = prevHist[prevHist.length - 1];
         if (
@@ -271,15 +337,39 @@ export default function App() {
     });
 
     setHistoryIndex((prevIdx) => (prevIdx === -1 ? 0 : prevIdx + 1));
-  }, []);
 
-  // Engine Search Trigger with Grandmaster Opening Book Check
+    // CHECK FOR PRE-MOVE EXECUTION
+    const pm = preMoveRef.current;
+    if (pm) {
+      const pCol = gameMode === 'player-vs-engine-white' ? 'w' : gameMode === 'player-vs-engine-black' ? 'b' : null;
+      // If next turn is the player's turn, check if the premove is legal
+      if (pCol === null || next.turn === pCol) {
+        const nextLegals = generateLegalMoves(next);
+        const matchPreMove = nextLegals.find(
+          (m) =>
+            m.from === pm.from &&
+            m.to === pm.to &&
+            (!pm.promotion || m.promotion === pm.promotion)
+        );
+        setPreMove(null);
+        preMoveRef.current = null;
+        if (matchPreMove) {
+          // Pre-move is legal! Execute immediately with minimal tick
+          setTimeout(() => {
+            executeMove(matchPreMove);
+          }, 30);
+        }
+      }
+    }
+  }, [timeControl, gameMode]);
+
+  // Engine Search Trigger with Stockfish 19 Time Management
   const triggerEngineMove = useCallback(
     async (overrideState?: BoardState) => {
       const stateToSearch = overrideState || boardStateRef.current;
       const status = getGameStatus(stateToSearch);
 
-      if (status === 'checkmate' || status === 'stalemate' || status.startsWith('draw')) {
+      if (status === 'checkmate' || status === 'stalemate' || status.startsWith('draw') || status.startsWith('timeout')) {
         return;
       }
 
@@ -301,7 +391,6 @@ export default function App() {
             opening: { eco: bookMove.eco, name: bookMove.name, nameRu: bookMove.nameRu },
           });
 
-          // Short delay for realistic feel
           setTimeout(() => {
             executeMove(bookMove.move);
           }, 150);
@@ -311,14 +400,24 @@ export default function App() {
 
       setIsSearching(true);
 
+      // Stockfish 19 Dynamic Time Allocation
+      let allocatedTimeMs = fixedTimeMs;
+      if (timeControl.initialSeconds > 0) {
+        const engineTimeRemaining = stateToSearch.turn === 'w' ? whiteTimeMs : blackTimeMs;
+        allocatedTimeMs = calculateEngineMoveTime(
+          engineTimeRemaining,
+          timeControl.incrementSeconds * 1000,
+          stateToSearch.fullmoveNumber * 2
+        );
+      }
+
       try {
         const result = await wasmEngineRef.current.search(
           stateToSearch,
           {
-            maxDepth,
-            timeLimitMs,
+            maxDepth, // Full strength deep search (e.g. 12-14)
+            timeLimitMs: allocatedTimeMs,
             useQuiescence,
-            strategy: searchStrategy,
           },
           (progress) => {
             setSearchStats(progress);
@@ -336,7 +435,7 @@ export default function App() {
         setIsSearching(false);
       }
     },
-    [maxDepth, timeLimitMs, useQuiescence, useOpeningBook, searchStrategy, history, executeMove, getGameStatus]
+    [maxDepth, fixedTimeMs, timeControl, whiteTimeMs, blackTimeMs, useQuiescence, useOpeningBook, history, executeMove, getGameStatus]
   );
 
   // Background analysis when in Analysis mode or waiting for player
@@ -347,10 +446,9 @@ export default function App() {
         const result = await wasmEngineRef.current.search(
           stateToAnalyze,
           {
-            maxDepth: Math.min(6, maxDepth),
-            timeLimitMs: Math.min(1200, timeLimitMs === 0 ? 1000 : timeLimitMs),
+            maxDepth: Math.min(8, maxDepth),
+            timeLimitMs: Math.min(1200, fixedTimeMs),
             useQuiescence,
-            strategy: searchStrategy,
           },
           (progress) => {
             setSearchStats(progress);
@@ -363,7 +461,7 @@ export default function App() {
         setIsSearching(false);
       }
     },
-    [maxDepth, timeLimitMs, useQuiescence, searchStrategy]
+    [maxDepth, fixedTimeMs, useQuiescence]
   );
 
   // Request Tactical Hint for Player
@@ -372,7 +470,6 @@ export default function App() {
     setIsCalculatingHint(true);
 
     try {
-      // 1. Check opening book first
       if (useOpeningBook) {
         const bookMove = getBookMove(displayedState, historyRef.current);
         if (bookMove) {
@@ -383,12 +480,10 @@ export default function App() {
         }
       }
 
-      // 2. Search engine calculation for best move
       const result = await wasmEngineRef.current.search(displayedState, {
-        maxDepth: Math.min(6, maxDepth),
-        timeLimitMs: 800,
+        maxDepth: Math.min(8, maxDepth),
+        timeLimitMs: 1000,
         useQuiescence: true,
-        strategy: searchStrategy,
       });
 
       if (result.bestMove) {
@@ -403,22 +498,12 @@ export default function App() {
     }
   }, [displayedState, history, isCalculatingHint, isSearching, maxDepth, useOpeningBook]);
 
-  // Handle skill level change
-  const handleSkillLevelChange = (lvl: EngineSkillLevel) => {
-    setSkillLevel(lvl);
-    const cfg = SKILL_CONFIGS[lvl];
-    setMaxDepth(cfg.depth);
-    setTimeLimitMs(cfg.timeMs);
-    setUseQuiescence(cfg.useQuiescence);
-    setUseOpeningBook(cfg.useBook);
-  };
-
   // Auto-play trigger for AI turns
   useEffect(() => {
     if (isBrowsingHistory) return;
 
     const status = getGameStatus(boardState);
-    if (status === 'checkmate' || status === 'stalemate' || status.startsWith('draw')) {
+    if (status === 'checkmate' || status === 'stalemate' || status.startsWith('draw') || status.startsWith('timeout')) {
       return;
     }
 
@@ -450,6 +535,9 @@ export default function App() {
     setIsSearching(false);
     setHintMove(null);
     setActiveHintExplanation(null);
+    setPreMove(null);
+    setTimeoutStatus(null);
+
     const start = parseFEN(START_FEN);
     setBoardState(start);
     boardStateRef.current = start;
@@ -458,6 +546,10 @@ export default function App() {
     setStateSnapshots([start]);
     setHistoryIndex(-1);
     setSearchStats(null);
+
+    // Reset clocks
+    setWhiteTimeMs(timeControl.initialSeconds * 1000);
+    setBlackTimeMs(timeControl.initialSeconds * 1000);
   };
 
   // Flip Board
@@ -472,6 +564,7 @@ export default function App() {
 
     setHintMove(null);
     setActiveHintExplanation(null);
+    setPreMove(null);
 
     const stepCount =
       gameMode === 'player-vs-engine-white' || gameMode === 'player-vs-engine-black'
@@ -497,6 +590,8 @@ export default function App() {
     setIsSearching(false);
     setHintMove(null);
     setActiveHintExplanation(null);
+    setPreMove(null);
+    setTimeoutStatus(null);
     try {
       const parsed = parseFEN(fen);
       setBoardState(parsed);
@@ -506,6 +601,8 @@ export default function App() {
       setStateSnapshots([parsed]);
       setHistoryIndex(-1);
       setSearchStats(null);
+      setWhiteTimeMs(timeControl.initialSeconds * 1000);
+      setBlackTimeMs(timeControl.initialSeconds * 1000);
     } catch (e) {
       console.error('Invalid FEN loaded', e);
     }
@@ -530,12 +627,73 @@ export default function App() {
   // Game mode change
   const handleModeChange = (mode: GameMode) => {
     setGameMode(mode);
+    setPreMove(null);
     if (mode === 'player-vs-engine-white') {
       setOrientation('w');
     } else if (mode === 'player-vs-engine-black') {
       setOrientation('b');
     }
   };
+
+  // Change time control
+  const handleTimeControlChange = (tcId: string) => {
+    const found = TIME_PRESETS.find((p) => p.id === tcId) || TIME_PRESETS[0];
+    setTimeControl(found);
+    setWhiteTimeMs(found.initialSeconds * 1000);
+    setBlackTimeMs(found.initialSeconds * 1000);
+    setTimeoutStatus(null);
+  };
+
+  // Captured pieces and material counts
+  const capturedPieces = useMemo(() => {
+    const whiteCaptured: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 0 };
+    const blackCaptured: Record<PieceType, number> = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 0 };
+
+    for (const piece of displayedState.board) {
+      if (!piece) continue;
+      if (piece.color === 'w') {
+        whiteCaptured[piece.type] = Math.max(0, whiteCaptured[piece.type] - 1);
+      } else {
+        blackCaptured[piece.type] = Math.max(0, blackCaptured[piece.type] - 1);
+      }
+    }
+
+    return {
+      capturedFromWhite: whiteCaptured, // Captured from White (held by Black)
+      capturedFromBlack: blackCaptured, // Captured from Black (held by White)
+    };
+  }, [displayedState.board]);
+
+  // Determine top and bottom player identities
+  const topColor: Color = orientation === 'w' ? 'b' : 'w';
+  const bottomColor: Color = orientation === 'w' ? 'w' : 'b';
+
+  const topIsEngine =
+    (gameMode === 'player-vs-engine-white' && topColor === 'b') ||
+    (gameMode === 'player-vs-engine-black' && topColor === 'w') ||
+    gameMode === 'engine-vs-engine';
+
+  const bottomIsEngine =
+    (gameMode === 'player-vs-engine-white' && bottomColor === 'b') ||
+    (gameMode === 'player-vs-engine-black' && bottomColor === 'w') ||
+    gameMode === 'engine-vs-engine';
+
+  const topName = topIsEngine
+    ? 'Stockfish NNUE (2800+ ELO)'
+    : topColor === 'w'
+    ? 'Белые (Игрок)'
+    : 'Чёрные (Игрок)';
+
+  const bottomName = bottomIsEngine
+    ? 'Stockfish NNUE (2800+ ELO)'
+    : bottomColor === 'w'
+    ? 'Вы (Белые)'
+    : 'Вы (Чёрные)';
+
+  const topTime = topColor === 'w' ? whiteTimeMs : blackTimeMs;
+  const bottomTime = bottomColor === 'w' ? whiteTimeMs : blackTimeMs;
+  const isTopTurn = displayedState.turn === topColor;
+  const isBottomTurn = displayedState.turn === bottomColor;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -548,19 +706,36 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-2">
-                Шахматный движок HCE
+                Шахматный движок Stockfish NNUE
                 <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                  GM Book & UCI 2.0
+                  ⚡ Полная сила • 2800+ ELO
                 </span>
               </h1>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Классическая функция оценки (HCE), гроссмейстерская книга дебютов и протокол UCI
+                Чистый нейросетевой поиск (HalfKAv2 NNUE), тайм-менеджмент SF 19, предходы и дебютная книга
               </p>
             </div>
           </div>
 
           {/* Quick Action Buttons */}
           <div className="flex items-center gap-2">
+            {/* Time Control Selector */}
+            <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg">
+              <Clock className="w-3.5 h-3.5 text-amber-400" />
+              <select
+                value={timeControl.id}
+                onChange={(e) => handleTimeControlChange(e.target.value)}
+                className="bg-transparent text-xs text-slate-200 font-medium focus:outline-none cursor-pointer"
+                title="Выбор контроля времени"
+              >
+                {TIME_PRESETS.map((tc) => (
+                  <option key={tc.id} value={tc.id} className="bg-slate-900 text-slate-200">
+                    {tc.nameRu}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* UCI Console Toggle Button */}
             <button
               onClick={() => setIsUciOpen((prev) => !prev)}
@@ -579,7 +754,7 @@ export default function App() {
             <button
               onClick={cycleEvalBar}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-medium text-slate-200 transition-colors cursor-pointer"
-              title="Переключить положение шкалы оценки (Слева / Справа / Скрыть)"
+              title="Переключить положение шкалы оценки"
             >
               <Columns className="w-4 h-4 text-emerald-400" />
               <span className="hidden sm:inline">Шкала:</span>
@@ -605,7 +780,7 @@ export default function App() {
               className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-medium text-slate-200 transition-colors cursor-pointer"
             >
               <FolderOpen className="w-4 h-4 text-emerald-400" />
-              <span>FEN / Позиции</span>
+              <span>FEN</span>
             </button>
 
             <button
@@ -613,7 +788,7 @@ export default function App() {
               className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/30 rounded-lg text-xs font-semibold text-rose-300 transition-colors cursor-pointer"
             >
               <RotateCcw className="w-4 h-4" />
-              <span>Сброс</span>
+              <span>Новая игра</span>
             </button>
           </div>
         </div>
@@ -621,13 +796,13 @@ export default function App() {
 
       {/* Main Board & Engine Work Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Chessboard + Eval Bar */}
-        <div className="lg:col-span-7 flex flex-col items-center gap-3">
-          {/* Status Alert Banner (Shown for terminal game over states: Checkmate, Stalemate, Draws) */}
+        {/* Left Column: Chessboard + Eval Bar + Clocks */}
+        <div className="lg:col-span-7 flex flex-col items-center gap-2.5">
+          {/* Status Alert Banner (Shown for terminal game over states) */}
           {gameStatus !== 'ongoing' && gameStatus !== 'check' && (
             <div
-              className={`w-full max-w-[680px] py-2 px-4 rounded-xl border text-sm font-semibold flex items-center justify-between animate-fade-in ${
-                gameStatus === 'checkmate'
+              className={`w-full max-w-[620px] py-2.5 px-4 rounded-xl border text-sm font-semibold flex items-center justify-between shadow-lg animate-fade-in ${
+                gameStatus === 'checkmate' || gameStatus.startsWith('timeout')
                   ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
                   : 'bg-blue-500/20 border-blue-500/40 text-blue-300'
               }`}
@@ -635,20 +810,78 @@ export default function App() {
               <span>
                 {gameStatus === 'checkmate' &&
                   `МАТ! Победили ${displayedState.turn === 'w' ? 'Чёрные' : 'Белые'}.`}
+                {gameStatus === 'timeout-white' && 'Время вышло! Чёрные победили по времени.'}
+                {gameStatus === 'timeout-black' && 'Время вышло! Белые победили по времени.'}
                 {gameStatus === 'stalemate' && 'ПАТ! Ничья (нет доступных ходов).'}
                 {gameStatus === 'draw-threefold' && 'Ничья! Троекратное повторение позиции.'}
                 {gameStatus === 'draw-fifty-move' && 'Ничья по правилу 50 ходов.'}
                 {gameStatus === 'draw-insufficient-material' &&
                   'Ничья из-за недостатка материала для мата.'}
               </span>
-              <span className="text-xs font-mono uppercase opacity-75">
+              <span className="text-xs font-mono uppercase opacity-80">
                 Ход #{displayedState.fullmoveNumber}
               </span>
             </div>
           )}
 
-          {/* Board + Eval Bar Container (Height perfectly matched and responsive) */}
-          <div className="flex items-stretch gap-2.5 sm:gap-3 w-full max-w-[680px] justify-center mx-auto">
+          {/* Top Player Banner & Chess Clock */}
+          <div className="w-full max-w-[620px] flex items-center justify-between px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl shadow-md">
+            <div className="flex items-center gap-2">
+              <div className={`p-1.5 rounded-lg ${topIsEngine ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-300'}`}>
+                {topIsEngine ? <Bot className="w-4 h-4" /> : <User className="w-4 h-4" />}
+              </div>
+              <div className="flex flex-col">
+                <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                  {topName}
+                  {topIsEngine && (
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-mono">
+                      SF NNUE
+                    </span>
+                  )}
+                </span>
+                {/* Captured pieces */}
+                <div className="flex items-center gap-0.5 text-[11px] text-slate-400 font-mono">
+                  {topColor === 'b' ? (
+                    <>
+                      {capturedPieces.capturedFromWhite.p > 0 && <span>♙{capturedPieces.capturedFromWhite.p}</span>}
+                      {capturedPieces.capturedFromWhite.n > 0 && <span>♘{capturedPieces.capturedFromWhite.n}</span>}
+                      {capturedPieces.capturedFromWhite.b > 0 && <span>♗{capturedPieces.capturedFromWhite.b}</span>}
+                      {capturedPieces.capturedFromWhite.r > 0 && <span>♖{capturedPieces.capturedFromWhite.r}</span>}
+                      {capturedPieces.capturedFromWhite.q > 0 && <span>♕{capturedPieces.capturedFromWhite.q}</span>}
+                    </>
+                  ) : (
+                    <>
+                      {capturedPieces.capturedFromBlack.p > 0 && <span>♟{capturedPieces.capturedFromBlack.p}</span>}
+                      {capturedPieces.capturedFromBlack.n > 0 && <span>♞{capturedPieces.capturedFromBlack.n}</span>}
+                      {capturedPieces.capturedFromBlack.b > 0 && <span>♝{capturedPieces.capturedFromBlack.b}</span>}
+                      {capturedPieces.capturedFromBlack.r > 0 && <span>♜{capturedPieces.capturedFromBlack.r}</span>}
+                      {capturedPieces.capturedFromBlack.q > 0 && <span>♛{capturedPieces.capturedFromBlack.q}</span>}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Top Clock Display */}
+            <div
+              className={`font-mono text-sm sm:text-base font-bold px-3 py-1 rounded-lg border transition-all ${
+                timeControl.initialSeconds === 0
+                  ? 'bg-slate-950 text-slate-400 border-slate-800'
+                  : isTopTurn
+                  ? topTime < 10000
+                    ? 'bg-rose-950/80 text-rose-300 border-rose-500 animate-pulse ring-2 ring-rose-500/40'
+                    : topTime < 30000
+                    ? 'bg-amber-950/80 text-amber-300 border-amber-500/80 ring-2 ring-amber-500/30'
+                    : 'bg-emerald-950/80 text-emerald-300 border-emerald-500/80 ring-2 ring-emerald-500/30'
+                  : 'bg-slate-950 text-slate-300 border-slate-800'
+              }`}
+            >
+              {timeControl.initialSeconds === 0 ? '∞' : formatClockTime(topTime)}
+            </div>
+          </div>
+
+          {/* Board + Eval Bar Container */}
+          <div className="flex items-stretch gap-2.5 sm:gap-3 w-full max-w-[620px] justify-center mx-auto">
             {/* Real-time Vertical Evaluation Bar on the LEFT */}
             {evalBarPosition === 'left' && (
               <EvalBar
@@ -667,10 +900,14 @@ export default function App() {
                 lastMove={lastMove}
                 bestMove={searchStats?.bestMove || null}
                 hintMove={hintMove}
-                threatSquares={threatSquares}
                 isEngineThinking={isSearching}
                 onMove={executeMove}
                 disabled={isBrowsingHistory}
+                preMove={preMove}
+                onSetPreMove={setPreMove}
+                onClearPreMove={() => setPreMove(null)}
+                canPreMove={canPreMove}
+                playerColor={playerColor}
               />
             </div>
 
@@ -685,8 +922,82 @@ export default function App() {
             )}
           </div>
 
+          {/* Bottom Player Banner & Chess Clock */}
+          <div className="w-full max-w-[620px] flex items-center justify-between px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl shadow-md">
+            <div className="flex items-center gap-2">
+              <div className={`p-1.5 rounded-lg ${bottomIsEngine ? 'bg-emerald-500/20 text-emerald-400' : 'bg-sky-500/20 text-sky-400'}`}>
+                {bottomIsEngine ? <Bot className="w-4 h-4" /> : <User className="w-4 h-4" />}
+              </div>
+              <div className="flex flex-col">
+                <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                  {bottomName}
+                  {bottomIsEngine && (
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-mono">
+                      SF NNUE
+                    </span>
+                  )}
+                </span>
+                {/* Captured pieces */}
+                <div className="flex items-center gap-0.5 text-[11px] text-slate-400 font-mono">
+                  {bottomColor === 'b' ? (
+                    <>
+                      {capturedPieces.capturedFromWhite.p > 0 && <span>♙{capturedPieces.capturedFromWhite.p}</span>}
+                      {capturedPieces.capturedFromWhite.n > 0 && <span>♘{capturedPieces.capturedFromWhite.n}</span>}
+                      {capturedPieces.capturedFromWhite.b > 0 && <span>♗{capturedPieces.capturedFromWhite.b}</span>}
+                      {capturedPieces.capturedFromWhite.r > 0 && <span>♖{capturedPieces.capturedFromWhite.r}</span>}
+                      {capturedPieces.capturedFromWhite.q > 0 && <span>♕{capturedPieces.capturedFromWhite.q}</span>}
+                    </>
+                  ) : (
+                    <>
+                      {capturedPieces.capturedFromBlack.p > 0 && <span>♟{capturedPieces.capturedFromBlack.p}</span>}
+                      {capturedPieces.capturedFromBlack.n > 0 && <span>♞{capturedPieces.capturedFromBlack.n}</span>}
+                      {capturedPieces.capturedFromBlack.b > 0 && <span>♝{capturedPieces.capturedFromBlack.b}</span>}
+                      {capturedPieces.capturedFromBlack.r > 0 && <span>♜{capturedPieces.capturedFromBlack.r}</span>}
+                      {capturedPieces.capturedFromBlack.q > 0 && <span>♛{capturedPieces.capturedFromBlack.q}</span>}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Clock Display */}
+            <div
+              className={`font-mono text-sm sm:text-base font-bold px-3 py-1 rounded-lg border transition-all ${
+                timeControl.initialSeconds === 0
+                  ? 'bg-slate-950 text-slate-400 border-slate-800'
+                  : isBottomTurn
+                  ? bottomTime < 10000
+                    ? 'bg-rose-950/80 text-rose-300 border-rose-500 animate-pulse ring-2 ring-rose-500/40'
+                    : bottomTime < 30000
+                    ? 'bg-amber-950/80 text-amber-300 border-amber-500/80 ring-2 ring-amber-500/30'
+                    : 'bg-emerald-950/80 text-emerald-300 border-emerald-500/80 ring-2 ring-emerald-500/30'
+                  : 'bg-slate-950 text-slate-300 border-slate-800'
+              }`}
+            >
+              {timeControl.initialSeconds === 0 ? '∞' : formatClockTime(bottomTime)}
+            </div>
+          </div>
+
+          {/* Pre-move Active Notice Banner */}
+          {preMove && (
+            <div className="w-full max-w-[620px] py-1.5 px-3 bg-sky-950/80 border border-sky-500/40 rounded-lg text-xs text-sky-200 flex items-center justify-between shadow-sm animate-fade-in">
+              <span className="flex items-center gap-2 font-medium">
+                <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping inline-block" />
+                <span>
+                  Предход активен: <strong className="text-white font-mono">{squareToAlgebraic(preMove.from)} → {squareToAlgebraic(preMove.to)}{preMove.promotion ? `=${preMove.promotion.toUpperCase()}` : ''}</strong>
+                </span>
+              </span>
+              <button
+                onClick={() => setPreMove(null)}
+                className="text-[11px] text-sky-300 hover:text-white underline cursor-pointer"
+              >
+                Отменить (ПКМ)
+              </button>
+            </div>
+          )}
+
           {/* Under-board Controls Bar */}
-          <div className="w-full max-w-[680px] flex flex-wrap items-center justify-between gap-2 p-2 bg-slate-900 border border-slate-800 rounded-xl text-xs">
+          <div className="w-full max-w-[620px] flex flex-wrap items-center justify-between gap-2 p-2 bg-slate-900 border border-slate-800 rounded-xl text-xs">
             {/* Mode selection tabs */}
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800">
               <button
@@ -786,7 +1097,7 @@ export default function App() {
           </div>
 
           {/* Interactive UCI Console in Left Column */}
-          <div className="w-full max-w-[680px]">
+          <div className="w-full max-w-[620px]">
             <UciConsole
               uciEngine={uciEngineRef.current}
               boardState={boardState}
@@ -797,7 +1108,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right Column: Move History + Engine Dashboard & HCE Breakdown */}
+        {/* Right Column: Move History + Engine Dashboard & NNUE Breakdown */}
         <div className="lg:col-span-5 flex flex-col gap-4">
           {/* Move History Component with Momentum Graph and Opening Name */}
           <MoveHistory
@@ -807,25 +1118,20 @@ export default function App() {
             opening={currentOpening}
           />
 
-          {/* Real-time Search Diagnostics & HCE Detailed Breakdown */}
+          {/* Real-time Search Diagnostics & NNUE Detailed Breakdown */}
           <EngineDashboard
             stats={searchStats}
             breakdown={breakdown}
             isSearching={isSearching}
             maxDepth={maxDepth}
             onMaxDepthChange={setMaxDepth}
-            timeLimitMs={timeLimitMs}
-            onTimeLimitChange={setTimeLimitMs}
+            fixedTimeMs={fixedTimeMs}
+            onFixedTimeMsChange={setFixedTimeMs}
             useQuiescence={useQuiescence}
             onToggleQuiescence={() => setUseQuiescence((prev) => !prev)}
-            skillLevel={skillLevel}
-            onSkillLevelChange={handleSkillLevelChange}
-            searchStrategy={searchStrategy}
-            onSearchStrategyChange={setSearchStrategy}
             useOpeningBook={useOpeningBook}
             onToggleOpeningBook={() => setUseOpeningBook((prev) => !prev)}
             currentOpening={currentOpening}
-            threats={threats}
             activeHint={activeHintExplanation}
             onClearHint={() => {
               setHintMove(null);

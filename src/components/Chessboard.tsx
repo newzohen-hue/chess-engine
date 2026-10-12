@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BoardState, Color, Move, Piece, PieceType } from '../types/chess';
+import { BoardState, Color, Move, PieceType, PreMove } from '../types/chess';
 import {
   findKing,
   generateLegalMoves,
@@ -16,10 +16,14 @@ interface ChessboardProps {
   lastMove: Move | null;
   bestMove: Move | null;
   hintMove?: Move | null;
-  threatSquares?: number[];
   isEngineThinking: boolean;
   onMove: (move: Move) => void;
   disabled?: boolean;
+  preMove?: PreMove | null;
+  onSetPreMove?: (move: PreMove) => void;
+  onClearPreMove?: () => void;
+  canPreMove?: boolean;
+  playerColor?: Color | null;
 }
 
 interface PendingPromotion {
@@ -27,6 +31,7 @@ interface PendingPromotion {
   to: number;
   color: Color;
   captured?: PieceType;
+  isPreMove?: boolean;
 }
 
 export const Chessboard: React.FC<ChessboardProps> = ({
@@ -35,24 +40,30 @@ export const Chessboard: React.FC<ChessboardProps> = ({
   lastMove,
   bestMove,
   hintMove,
-  threatSquares = [],
   isEngineThinking,
   onMove,
   disabled = false,
+  preMove = null,
+  onSetPreMove,
+  onClearPreMove,
+  canPreMove = false,
+  playerColor = null,
 }) => {
   const [selectedSquare, setSelectedSquare] = useState<number | null>(null);
   const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
+
+  const isMyTurn = !disabled && !isEngineThinking && (playerColor === null || state.turn === playerColor);
 
   // All legal moves from current state
   const legalMoves = React.useMemo(() => {
     return generateLegalMoves(state);
   }, [state]);
 
-  // Legal moves for selected piece
+  // Legal moves for selected piece when it is player's turn
   const selectedSquareMoves = React.useMemo(() => {
-    if (selectedSquare === null) return [];
+    if (selectedSquare === null || !isMyTurn) return [];
     return legalMoves.filter((m) => m.from === selectedSquare);
-  }, [legalMoves, selectedSquare]);
+  }, [legalMoves, selectedSquare, isMyTurn]);
 
   const inCheck = isKingInCheck(state.board, state.turn);
   const kingInCheckSq = inCheck ? findKing(state.board, state.turn) : -1;
@@ -63,69 +74,136 @@ export const Chessboard: React.FC<ChessboardProps> = ({
   };
 
   const handleSquareClick = (sq: number) => {
-    if (disabled || isEngineThinking) return;
+    if (disabled) return;
 
     const clickedPiece = state.board[sq];
 
-    // If already selected, check if clicked square is a legal destination
-    if (selectedSquare !== null) {
-      const matchMove = selectedSquareMoves.find((m) => m.to === sq);
+    // CASE 1: Normal turn move
+    if (isMyTurn) {
+      if (selectedSquare !== null) {
+        const matchMove = selectedSquareMoves.find((m) => m.to === sq);
 
-      if (matchMove) {
-        // Check for promotion
-        const piece = state.board[selectedSquare];
-        const isPromoRank =
-          piece?.type === 'p' &&
-          ((piece.color === 'w' && squareToRank(sq) === 0) ||
-            (piece.color === 'b' && squareToRank(sq) === 7));
+        if (matchMove) {
+          const piece = state.board[selectedSquare];
+          const isPromoRank =
+            piece?.type === 'p' &&
+            ((piece.color === 'w' && squareToRank(sq) === 0) ||
+              (piece.color === 'b' && squareToRank(sq) === 7));
 
-        if (isPromoRank) {
-          setPendingPromotion({
+          if (isPromoRank) {
+            setPendingPromotion({
+              from: selectedSquare,
+              to: sq,
+              color: piece.color,
+              captured: clickedPiece?.type,
+              isPreMove: false,
+            });
+            setSelectedSquare(null);
+            return;
+          }
+
+          onMove(matchMove);
+          setSelectedSquare(null);
+          return;
+        }
+
+        // Reselect own piece
+        if (clickedPiece && clickedPiece.color === state.turn) {
+          setSelectedSquare(sq);
+          return;
+        }
+
+        // Deselect
+        setSelectedSquare(null);
+        return;
+      }
+
+      // Initial piece selection
+      if (clickedPiece && clickedPiece.color === state.turn) {
+        setSelectedSquare(sq);
+      }
+      return;
+    }
+
+    // CASE 2: Pre-move queuing (when it's opponent's turn / engine is thinking)
+    if (canPreMove && playerColor) {
+      if (selectedSquare !== null) {
+        // If clicked another own piece, change selection
+        if (clickedPiece && clickedPiece.color === playerColor && sq !== selectedSquare) {
+          setSelectedSquare(sq);
+          return;
+        }
+
+        // Selected a destination square for pre-move
+        const sourcePiece = state.board[selectedSquare];
+        if (sourcePiece && sourcePiece.color === playerColor && sq !== selectedSquare) {
+          const isPromoRank =
+            sourcePiece.type === 'p' &&
+            ((sourcePiece.color === 'w' && squareToRank(sq) === 0) ||
+              (sourcePiece.color === 'b' && squareToRank(sq) === 7));
+
+          if (isPromoRank) {
+            setPendingPromotion({
+              from: selectedSquare,
+              to: sq,
+              color: sourcePiece.color,
+              captured: clickedPiece?.type,
+              isPreMove: true,
+            });
+            setSelectedSquare(null);
+            return;
+          }
+
+          onSetPreMove?.({
             from: selectedSquare,
             to: sq,
-            color: piece.color,
-            captured: clickedPiece?.type,
+            piece: sourcePiece.type,
+            color: sourcePiece.color,
           });
           setSelectedSquare(null);
           return;
         }
 
-        onMove(matchMove);
         setSelectedSquare(null);
         return;
       }
 
-      // If clicked own piece again, reselect
-      if (clickedPiece && clickedPiece.color === state.turn) {
+      // Select piece of player's color for pre-move
+      if (clickedPiece && clickedPiece.color === playerColor) {
         setSelectedSquare(sq);
-        return;
       }
-
-      // Clicked invalid destination: deselect
-      setSelectedSquare(null);
-      return;
-    }
-
-    // Select piece if it's player's turn piece
-    if (clickedPiece && clickedPiece.color === state.turn) {
-      setSelectedSquare(sq);
     }
   };
 
   // Drag and drop handlers
   const handleDragStart = (e: React.DragEvent, sq: number) => {
-    if (disabled || isEngineThinking) {
+    if (disabled) {
       e.preventDefault();
       return;
     }
     const piece = state.board[sq];
-    if (!piece || piece.color !== state.turn) {
+    if (!piece) {
       e.preventDefault();
       return;
     }
-    e.dataTransfer.setData('text/plain', sq.toString());
-    e.dataTransfer.effectAllowed = 'move';
-    setSelectedSquare(sq);
+
+    // Normal move drag
+    if (isMyTurn && piece.color === state.turn) {
+      e.dataTransfer.setData('text/plain', sq.toString());
+      e.dataTransfer.effectAllowed = 'move';
+      setSelectedSquare(sq);
+      return;
+    }
+
+    // Pre-move drag
+    if (canPreMove && playerColor && piece.color === playerColor) {
+      e.dataTransfer.setData('text/plain', sq.toString());
+      e.dataTransfer.effectAllowed = 'move';
+      setSelectedSquare(sq);
+      return;
+    }
+
+    e.preventDefault();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -138,13 +216,37 @@ export const Chessboard: React.FC<ChessboardProps> = ({
     const sourceSqStr = e.dataTransfer.getData('text/plain');
     if (!sourceSqStr) return;
     const sourceSq = parseInt(sourceSqStr, 10);
-    if (isNaN(sourceSq)) return;
+    if (isNaN(sourceSq) || sourceSq === targetSq) return;
 
-    const matchMove = legalMoves.find((m) => m.from === sourceSq && m.to === targetSq);
-    if (matchMove) {
-      const piece = state.board[sourceSq];
+    const piece = state.board[sourceSq];
+    if (!piece) return;
+
+    if (isMyTurn) {
+      const matchMove = legalMoves.find((m) => m.from === sourceSq && m.to === targetSq);
+      if (matchMove) {
+        const isPromoRank =
+          piece.type === 'p' &&
+          ((piece.color === 'w' && squareToRank(targetSq) === 0) ||
+            (piece.color === 'b' && squareToRank(targetSq) === 7));
+
+        if (isPromoRank) {
+          setPendingPromotion({
+            from: sourceSq,
+            to: targetSq,
+            color: piece.color,
+            captured: state.board[targetSq]?.type,
+            isPreMove: false,
+          });
+          setSelectedSquare(null);
+          return;
+        }
+
+        onMove(matchMove);
+        setSelectedSquare(null);
+      }
+    } else if (canPreMove && playerColor && piece.color === playerColor) {
       const isPromoRank =
-        piece?.type === 'p' &&
+        piece.type === 'p' &&
         ((piece.color === 'w' && squareToRank(targetSq) === 0) ||
           (piece.color === 'b' && squareToRank(targetSq) === 7));
 
@@ -154,18 +256,37 @@ export const Chessboard: React.FC<ChessboardProps> = ({
           to: targetSq,
           color: piece.color,
           captured: state.board[targetSq]?.type,
+          isPreMove: true,
         });
         setSelectedSquare(null);
         return;
       }
 
-      onMove(matchMove);
+      onSetPreMove?.({
+        from: sourceSq,
+        to: targetSq,
+        piece: piece.type,
+        color: piece.color,
+      });
       setSelectedSquare(null);
     }
   };
 
   const executePromotion = (promo: PieceType) => {
     if (!pendingPromotion) return;
+
+    if (pendingPromotion.isPreMove) {
+      onSetPreMove?.({
+        from: pendingPromotion.from,
+        to: pendingPromotion.to,
+        piece: 'p',
+        color: pendingPromotion.color,
+        promotion: promo,
+      });
+      setPendingPromotion(null);
+      return;
+    }
+
     const matchMove = legalMoves.find(
       (m) =>
         m.from === pendingPromotion.from &&
@@ -178,7 +299,16 @@ export const Chessboard: React.FC<ChessboardProps> = ({
     setPendingPromotion(null);
   };
 
-  // Calculate coordinates for Best Move Arrow
+  // Right-click clears pre-move or selection
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (preMove) {
+      onClearPreMove?.();
+    }
+    setSelectedSquare(null);
+  };
+
+  // Calculate coordinates for Best Move & Pre-move Arrows
   const getSquareCenterPercent = (sq: number) => {
     const rank = squareToRank(sq);
     const file = squareToFile(sq);
@@ -191,7 +321,10 @@ export const Chessboard: React.FC<ChessboardProps> = ({
   };
 
   return (
-    <div className="relative w-full max-w-[620px] aspect-square rounded-xl overflow-hidden shadow-2xl border-4 border-slate-800 bg-slate-900 select-none">
+    <div
+      onContextMenu={handleContextMenu}
+      className="relative w-full max-w-[620px] aspect-square rounded-xl overflow-hidden shadow-2xl border-4 border-slate-800 bg-slate-900 select-none"
+    >
       {/* 8x8 Board Grid */}
       <div className="grid grid-cols-8 grid-rows-8 w-full h-full">
         {Array.from({ length: 64 }).map((_, idx) => {
@@ -204,9 +337,10 @@ export const Chessboard: React.FC<ChessboardProps> = ({
           const isSelected = selectedSquare === sq;
           const isLastMove = lastMove && (lastMove.from === sq || lastMove.to === sq);
           const isCheck = kingInCheckSq === sq;
+          const isPreMoveSq = preMove && (preMove.from === sq || preMove.to === sq);
 
-          // Legal move marker
-          const legalTarget = selectedSquareMoves.find((m) => m.to === sq);
+          // Legal move marker (only when it is player's turn)
+          const legalTarget = isMyTurn ? selectedSquareMoves.find((m) => m.to === sq) : null;
           const isCaptureTarget = legalTarget && (state.board[sq] || legalTarget.isEnPassant);
 
           // Square rank and file labels
@@ -222,9 +356,21 @@ export const Chessboard: React.FC<ChessboardProps> = ({
           if (isLastMove) {
             bgClass = isDark ? 'bg-[#BBCB44]' : 'bg-[#F5F682]';
           }
-          if (isSelected) {
-            bgClass = isDark ? 'bg-[#22C55E]/80 ring-inset ring-2 ring-emerald-300' : 'bg-[#86EFAC] ring-inset ring-2 ring-emerald-500';
+          if (isPreMoveSq) {
+            bgClass = isDark
+              ? 'bg-sky-600/75 ring-inset ring-2 ring-sky-300'
+              : 'bg-sky-300 ring-inset ring-2 ring-sky-500';
           }
+          if (isSelected) {
+            bgClass = isDark
+              ? 'bg-[#22C55E]/80 ring-inset ring-2 ring-emerald-300'
+              : 'bg-[#86EFAC] ring-inset ring-2 ring-emerald-500';
+          }
+
+          const canDrag =
+            !disabled &&
+            ((isMyTurn && piece?.color === state.turn) ||
+              (canPreMove && playerColor && piece?.color === playerColor));
 
           return (
             <div
@@ -238,11 +384,6 @@ export const Chessboard: React.FC<ChessboardProps> = ({
               {/* Check Crimson Glow */}
               {isCheck && (
                 <div className="absolute inset-0 bg-red-600/60 rounded-full animate-pulse blur-[2px]" />
-              )}
-
-              {/* Tactical Threat Warning Glow */}
-              {threatSquares.includes(sq) && !isCheck && (
-                <div className="absolute inset-0 bg-rose-500/20 ring-2 ring-inset ring-rose-500/80 pointer-events-none animate-pulse z-5" />
               )}
 
               {/* Coordinate Labels */}
@@ -268,9 +409,11 @@ export const Chessboard: React.FC<ChessboardProps> = ({
               {/* Piece SVG */}
               {piece && (
                 <div
-                  draggable={!disabled && !isEngineThinking && piece.color === state.turn}
+                  draggable={Boolean(canDrag)}
                   onDragStart={(e) => handleDragStart(e, sq)}
-                  className={`w-[84%] h-[84%] cursor-grab active:cursor-grabbing transition-transform ${
+                  className={`w-[84%] h-[84%] ${
+                    canDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+                  } transition-transform ${
                     isSelected ? 'scale-105 drop-shadow-lg' : 'hover:scale-102'
                   }`}
                 >
@@ -278,7 +421,7 @@ export const Chessboard: React.FC<ChessboardProps> = ({
                 </div>
               )}
 
-              {/* Legal Move Indicators */}
+              {/* Legal Move Indicators (when it's user's turn) */}
               {legalTarget && !isCaptureTarget && (
                 <div className="absolute w-3.5 h-3.5 sm:w-4 sm:h-4 bg-slate-900/30 rounded-full pointer-events-none shadow-sm" />
               )}
@@ -290,8 +433,8 @@ export const Chessboard: React.FC<ChessboardProps> = ({
         })}
       </div>
 
-      {/* SVG Best Move & Hint Arrows Overlay */}
-      {(bestMove || hintMove) && (
+      {/* SVG Best Move, Pre-move & Hint Arrows Overlay */}
+      {(bestMove || hintMove || preMove) && (
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
           <defs>
             <marker
@@ -314,10 +457,39 @@ export const Chessboard: React.FC<ChessboardProps> = ({
             >
               <polygon points="0 0, 6 3, 0 6" fill="#10B981" opacity="0.9" />
             </marker>
+            <marker
+              id="premove-arrowhead"
+              markerWidth="6"
+              markerHeight="6"
+              refX="4"
+              refY="3"
+              orient="auto"
+            >
+              <polygon points="0 0, 6 3, 0 6" fill="#0284C7" opacity="0.95" />
+            </marker>
           </defs>
 
+          {/* Pre-move Arrow (Sky/Cyan) */}
+          {preMove && (() => {
+            const start = getSquareCenterPercent(preMove.from);
+            const end = getSquareCenterPercent(preMove.to);
+            return (
+              <line
+                x1={`${start.x}%`}
+                y1={`${start.y}%`}
+                x2={`${end.x}%`}
+                y2={`${end.y}%`}
+                stroke="#0284C7"
+                strokeWidth="7"
+                strokeLinecap="round"
+                opacity="0.95"
+                markerEnd="url(#premove-arrowhead)"
+              />
+            );
+          })()}
+
           {/* Hint Move Arrow (Emerald) */}
-          {hintMove && (() => {
+          {hintMove && !preMove && (() => {
             const start = getSquareCenterPercent(hintMove.from);
             const end = getSquareCenterPercent(hintMove.to);
             return (
@@ -336,7 +508,7 @@ export const Chessboard: React.FC<ChessboardProps> = ({
           })()}
 
           {/* Engine Best Move Arrow (Blue) */}
-          {bestMove && !hintMove && (() => {
+          {bestMove && !hintMove && !preMove && (() => {
             const start = getSquareCenterPercent(bestMove.from);
             const end = getSquareCenterPercent(bestMove.to);
             return (
@@ -360,7 +532,9 @@ export const Chessboard: React.FC<ChessboardProps> = ({
       {pendingPromotion && (
         <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-20">
           <div className="bg-slate-900 border border-slate-700 p-4 rounded-xl shadow-2xl flex flex-col items-center gap-3">
-            <span className="text-sm font-medium text-slate-200">Выберите фигуру для превращения:</span>
+            <span className="text-sm font-medium text-slate-200">
+              {pendingPromotion.isPreMove ? 'Фигура для предхода:' : 'Выберите фигуру для превращения:'}
+            </span>
             <div className="flex gap-2">
               {(['q', 'r', 'b', 'n'] as PieceType[]).map((promo) => (
                 <button

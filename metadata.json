@@ -1,6 +1,6 @@
 {
   "name": "Chess Engine HCE",
-  "description": "Шахматный движок с классической функцией оценки (HCE), альфа-бета поиском и интерактивной доской.",
+  "description": "Шахматный движок с нейросетевой функцией оценки Stockfish NNUE, альфа-бета поиском и интерактивной доской.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

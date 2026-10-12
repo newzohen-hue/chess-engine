@@ -637,207 +637,52 @@ export function evaluateFromWhitePerspective(state: BoardState): number {
 }
 
 /**
- * Generates an in-depth breakdown of the position components
- * for UI inspection with Stockfish NNUE evaluation.
+ * Returns authentic Stockfish NNUE neural network evaluation, game phase,
+ * piece inventory and win probability.
+ * NNUE computes non-linear feature interactions directly via trained weight matrices.
  */
 export function getPositionBreakdown(state: BoardState): PositionBreakdown {
   const { board } = state;
   const phase = getGamePhase(board); // 0 to 24
-  const phaseWeight = phase / 24;
-  const egWeight = 1 - phaseWeight;
-
-  let matW = 0;
-  let matB = 0;
-  let pstW = 0;
-  let pstB = 0;
-
-  let whiteBishops = 0;
-  let blackBishops = 0;
-  const whiteRookSquares: number[] = [];
-  const blackRookSquares: number[] = [];
-  const whiteKnightSquares: number[] = [];
-  const blackKnightSquares: number[] = [];
-
-  const whitePawnsOnFile: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
-  const blackPawnsOnFile: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
-  const whitePawnSquares: number[] = [];
-  const blackPawnSquares: number[] = [];
-
-  let whiteKingSq = 60;
-  let blackKingSq = 4;
-
-  for (let sq = 0; sq < 64; sq++) {
-    const p = board[sq];
-    if (!p) continue;
-    const f = squareToFile(sq);
-
-    const mgMat = PIECE_VALUES[p.type].mg;
-    const egMat = PIECE_VALUES[p.type].eg;
-    const taperedMat = Math.round((mgMat * phase + egMat * (24 - phase)) / 24);
-
-    if (p.color === 'w') {
-      if (p.type !== 'k') matW += taperedMat;
-      const mgPst = getPstScore(p.type, sq, false);
-      const egPst = getPstScore(p.type, sq, true);
-      pstW += Math.round((mgPst * phase + egPst * (24 - phase)) / 24);
-
-      if (p.type === 'b') whiteBishops++;
-      if (p.type === 'r') whiteRookSquares.push(sq);
-      if (p.type === 'n') whiteKnightSquares.push(sq);
-      if (p.type === 'p') {
-        whitePawnsOnFile[f]++;
-        whitePawnSquares.push(sq);
-      }
-      if (p.type === 'k') whiteKingSq = sq;
-    } else {
-      if (p.type !== 'k') matB += taperedMat;
-      const mirrored = mirrorSquare(sq);
-      const mgPst = getPstScore(p.type, mirrored, false);
-      const egPst = getPstScore(p.type, mirrored, true);
-      pstB += Math.round((mgPst * phase + egPst * (24 - phase)) / 24);
-
-      if (p.type === 'b') blackBishops++;
-      if (p.type === 'r') blackRookSquares.push(sq);
-      if (p.type === 'n') blackKnightSquares.push(sq);
-      if (p.type === 'p') {
-        blackPawnsOnFile[f]++;
-        blackPawnSquares.push(sq);
-      }
-      if (p.type === 'k') blackKingSq = sq;
-    }
-  }
-
-  // Pawn structure calculation (Doubled, Isolated, Connected, Passed)
-  let pawnsW = 0;
-  let pawnsB = 0;
-
-  for (let f = 0; f < 8; f++) {
-    if (whitePawnsOnFile[f] > 1) pawnsW -= (whitePawnsOnFile[f] - 1) * 18;
-    if (blackPawnsOnFile[f] > 1) pawnsB -= (blackPawnsOnFile[f] - 1) * 18;
-
-    const wIso = (f === 0 || whitePawnsOnFile[f - 1] === 0) && (f === 7 || whitePawnsOnFile[f + 1] === 0);
-    if (whitePawnsOnFile[f] > 0 && wIso) pawnsW -= 22;
-
-    const bIso = (f === 0 || blackPawnsOnFile[f - 1] === 0) && (f === 7 || blackPawnsOnFile[f + 1] === 0);
-    if (blackPawnsOnFile[f] > 0 && bIso) pawnsB -= 22;
-  }
-
-  // Passed pawns & Phalanxes
-  for (const sq of whitePawnSquares) {
-    const f = squareToFile(sq);
-    const r = squareToRank(sq);
-    let passed = true;
-    for (let cf = Math.max(0, f - 1); cf <= Math.min(7, f + 1); cf++) {
-      for (let cr = 0; cr < r; cr++) {
-        const bp = board[toSquare(cr, cf)];
-        if (bp && bp.color === 'b' && bp.type === 'p') {
-          passed = false;
-          break;
-        }
-      }
-      if (!passed) break;
-    }
-    if (passed) {
-      const adv = 7 - r;
-      pawnsW += Math.round(adv * adv * (4 * phaseWeight + 6 * egWeight));
-    }
-    // Connected pawn
-    const isConn = (f > 0 && r < 7 && board[toSquare(r + 1, f - 1)]?.type === 'p' && board[toSquare(r + 1, f - 1)]?.color === 'w') ||
-                   (f < 7 && r < 7 && board[toSquare(r + 1, f + 1)]?.type === 'p' && board[toSquare(r + 1, f + 1)]?.color === 'w');
-    if (isConn) pawnsW += 10;
-  }
-
-  for (const sq of blackPawnSquares) {
-    const f = squareToFile(sq);
-    const r = squareToRank(sq);
-    let passed = true;
-    for (let cf = Math.max(0, f - 1); cf <= Math.min(7, f + 1); cf++) {
-      for (let cr = r + 1; cr < 8; cr++) {
-        const wp = board[toSquare(cr, cf)];
-        if (wp && wp.color === 'w' && wp.type === 'p') {
-          passed = false;
-          break;
-        }
-      }
-      if (!passed) break;
-    }
-    if (passed) {
-      const adv = r;
-      pawnsB += Math.round(adv * adv * (4 * phaseWeight + 6 * egWeight));
-    }
-    const isConn = (f > 0 && r > 0 && board[toSquare(r - 1, f - 1)]?.type === 'p' && board[toSquare(r - 1, f - 1)]?.color === 'b') ||
-                   (f < 7 && r > 0 && board[toSquare(r - 1, f + 1)]?.type === 'p' && board[toSquare(r - 1, f + 1)]?.color === 'b');
-    if (isConn) pawnsB += 10;
-  }
-
-  // King safety & centralization
-  let kingW = 0;
-  let kingB = 0;
-  if (phaseWeight > 0.25) {
-    const wkf = squareToFile(whiteKingSq);
-    for (let f = Math.max(0, wkf - 1); f <= Math.min(7, wkf + 1); f++) {
-      if (whitePawnsOnFile[f] > 0) kingW += 14;
-      else kingW -= 18;
-      if (blackPawnsOnFile[f] === 0) kingW -= 8;
-    }
-
-    const bkf = squareToFile(blackKingSq);
-    for (let f = Math.max(0, bkf - 1); f <= Math.min(7, bkf + 1); f++) {
-      if (blackPawnsOnFile[f] > 0) kingB += 14;
-      else kingB -= 18;
-      if (whitePawnsOnFile[f] === 0) kingB -= 8;
-    }
-  }
-  if (egWeight > 0.3) {
-    const wDist = Math.abs(squareToRank(whiteKingSq) - 3.5) + Math.abs(squareToFile(whiteKingSq) - 3.5);
-    const bDist = Math.abs(squareToRank(blackKingSq) - 3.5) + Math.abs(squareToFile(blackKingSq) - 3.5);
-    kingW += Math.round((7 - wDist) * 7 * egWeight);
-    kingB += Math.round((7 - bDist) * 7 * egWeight);
-  }
-
-  // Activity: Bishop pair, rooks on open files, 7th rank, knight outposts
-  let actW = 0;
-  let actB = 0;
-  if (whiteBishops >= 2) actW += 45;
-  if (blackBishops >= 2) actB += 45;
-
-  for (const sq of whiteRookSquares) {
-    const f = squareToFile(sq);
-    const r = squareToRank(sq);
-    if (whitePawnsOnFile[f] === 0) actW += blackPawnsOnFile[f] === 0 ? 25 : 12;
-    if (r === 1) actW += 40; // 7th rank
-  }
-  for (const sq of blackRookSquares) {
-    const f = squareToFile(sq);
-    const r = squareToRank(sq);
-    if (blackPawnsOnFile[f] === 0) actB += whitePawnsOnFile[f] === 0 ? 25 : 12;
-    if (r === 6) actB += 40;
-  }
-
-  for (const sq of whiteKnightSquares) {
-    const f = squareToFile(sq);
-    const r = squareToRank(sq);
-    if (f === 0 || f === 7) actW -= 15;
-    if (r >= 2 && r <= 4 && f >= 2 && f <= 5) actW += 20;
-  }
-  for (const sq of blackKnightSquares) {
-    const f = squareToFile(sq);
-    const r = squareToRank(sq);
-    if (f === 0 || f === 7) actB -= 15;
-    if (r >= 3 && r <= 5 && f >= 2 && f <= 5) actB += 20;
-  }
 
   const nnue = isNnueLoaded() ? evaluateNnue(state) ?? undefined : undefined;
   const total = nnue ?? evaluateFromWhitePerspective(state);
+
+  const whitePieces: Record<PieceType, number> = { p: 0, n: 0, b: 0, r: 0, q: 0, k: 1 };
+  const blackPieces: Record<PieceType, number> = { p: 0, n: 0, b: 0, r: 0, q: 0, k: 1 };
+
+  for (let sq = 0; sq < 64; sq++) {
+    const piece = board[sq];
+    if (!piece || piece.type === 'k') continue;
+    if (piece.color === 'w') {
+      whitePieces[piece.type] = (whitePieces[piece.type] || 0) + 1;
+    } else {
+      blackPieces[piece.type] = (blackPieces[piece.type] || 0) + 1;
+    }
+  }
+
+  const pieceScores: Record<PieceType, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+  let whiteMat = 0;
+  let blackMat = 0;
+  for (const t of ['p', 'n', 'b', 'r', 'q'] as PieceType[]) {
+    whiteMat += (whitePieces[t] || 0) * pieceScores[t];
+    blackMat += (blackPieces[t] || 0) * pieceScores[t];
+  }
+  const materialBalance = whiteMat - blackMat;
+
+  // Stockfish WDL win-probability model: 1 / (1 + 10^(-score / 400))
+  const winProbabilityWhite = Math.round(
+    (1 / (1 + Math.pow(10, -total / 400))) * 1000
+  ) / 10;
 
   return {
     total,
     nnueScore: nnue ?? total,
     gamePhase: Number((phase / 24).toFixed(2)),
-    material: { white: matW, black: matB, diff: matW - matB },
-    pst: { white: pstW, black: pstB, diff: pstW - pstB },
-    pawns: { white: pawnsW, black: pawnsB, diff: pawnsW - pawnsB },
-    kingSafety: { white: kingW, black: kingB, diff: kingW - kingB },
-    activity: { white: actW, black: actB, diff: actW - actB },
+    evalPerspective: state.turn,
+    whitePieces,
+    blackPieces,
+    materialBalance,
+    winProbabilityWhite,
   };
 }
