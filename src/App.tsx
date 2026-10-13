@@ -84,6 +84,10 @@ export default function App() {
   const [timeControl, setTimeControl] = useState<TimeControlConfig>(() => TIME_PRESETS[3]); // 3+2 Blitz default
   const [whiteTimeMs, setWhiteTimeMs] = useState<number>(() => TIME_PRESETS[3].initialSeconds * 1000);
   const [blackTimeMs, setBlackTimeMs] = useState<number>(() => TIME_PRESETS[3].initialSeconds * 1000);
+  const whiteTimeMsRef = useRef<number>(whiteTimeMs);
+  whiteTimeMsRef.current = whiteTimeMs;
+  const blackTimeMsRef = useRef<number>(blackTimeMs);
+  blackTimeMsRef.current = blackTimeMs;
   const [timeoutStatus, setTimeoutStatus] = useState<'timeout-white' | 'timeout-black' | null>(null);
 
   // Pre-moves (Предходы)
@@ -99,6 +103,8 @@ export default function App() {
 
   // Engine State
   const [isSearching, setIsSearching] = useState<boolean>(false);
+  const isSearchingRef = useRef<boolean>(isSearching);
+  isSearchingRef.current = isSearching;
   const [searchStats, setSearchStats] = useState<SearchStats | null>(null);
   const [breakdown, setBreakdown] = useState<PositionBreakdown | null>(null);
 
@@ -369,7 +375,13 @@ export default function App() {
       const stateToSearch = overrideState || boardStateRef.current;
       const status = getGameStatus(stateToSearch);
 
-      if (status === 'checkmate' || status === 'stalemate' || status.startsWith('draw') || status.startsWith('timeout')) {
+      if (
+        status === 'checkmate' ||
+        status === 'stalemate' ||
+        status.startsWith('draw') ||
+        status.startsWith('timeout') ||
+        isSearchingRef.current
+      ) {
         return;
       }
 
@@ -398,12 +410,14 @@ export default function App() {
         }
       }
 
+      isSearchingRef.current = true;
       setIsSearching(true);
 
-      // Stockfish 19 Dynamic Time Allocation
+      // Stockfish 19 Dynamic Time Allocation (read from stable refs)
       let allocatedTimeMs = fixedTimeMs;
       if (timeControl.initialSeconds > 0) {
-        const engineTimeRemaining = stateToSearch.turn === 'w' ? whiteTimeMs : blackTimeMs;
+        const engineTimeRemaining =
+          stateToSearch.turn === 'w' ? whiteTimeMsRef.current : blackTimeMsRef.current;
         allocatedTimeMs = calculateEngineMoveTime(
           engineTimeRemaining,
           timeControl.incrementSeconds * 1000,
@@ -432,15 +446,21 @@ export default function App() {
       } catch (err) {
         console.error('Engine search error:', err);
       } finally {
+        isSearchingRef.current = false;
         setIsSearching(false);
       }
     },
-    [maxDepth, fixedTimeMs, timeControl, whiteTimeMs, blackTimeMs, useQuiescence, useOpeningBook, history, executeMove, getGameStatus]
+    [maxDepth, fixedTimeMs, timeControl, useQuiescence, useOpeningBook, executeMove, getGameStatus]
   );
+
+  const triggerEngineMoveRef = useRef(triggerEngineMove);
+  triggerEngineMoveRef.current = triggerEngineMove;
 
   // Background analysis when in Analysis mode or waiting for player
   const triggerAnalysisOnly = useCallback(
     async (stateToAnalyze: BoardState) => {
+      if (isSearchingRef.current) return;
+      isSearchingRef.current = true;
       setIsSearching(true);
       try {
         const result = await wasmEngineRef.current.search(
@@ -458,15 +478,19 @@ export default function App() {
       } catch (err) {
         console.error('Analysis error:', err);
       } finally {
+        isSearchingRef.current = false;
         setIsSearching(false);
       }
     },
     [maxDepth, fixedTimeMs, useQuiescence]
   );
 
+  const triggerAnalysisOnlyRef = useRef(triggerAnalysisOnly);
+  triggerAnalysisOnlyRef.current = triggerAnalysisOnly;
+
   // Request Tactical Hint for Player
   const requestHint = useCallback(async () => {
-    if (isCalculatingHint || isSearching) return;
+    if (isCalculatingHint || isSearchingRef.current) return;
     setIsCalculatingHint(true);
 
     try {
@@ -496,7 +520,7 @@ export default function App() {
     } finally {
       setIsCalculatingHint(false);
     }
-  }, [displayedState, history, isCalculatingHint, isSearching, maxDepth, useOpeningBook]);
+  }, [displayedState, history, isCalculatingHint, maxDepth, useOpeningBook]);
 
   // Auto-play trigger for AI turns
   useEffect(() => {
@@ -508,24 +532,22 @@ export default function App() {
     }
 
     if (gameMode === 'player-vs-engine-white' && boardState.turn === 'b') {
-      const timer = setTimeout(() => triggerEngineMove(boardState), 200);
+      const timer = setTimeout(() => triggerEngineMoveRef.current(boardState), 150);
       return () => clearTimeout(timer);
     } else if (gameMode === 'player-vs-engine-black' && boardState.turn === 'w') {
-      const timer = setTimeout(() => triggerEngineMove(boardState), 200);
+      const timer = setTimeout(() => triggerEngineMoveRef.current(boardState), 150);
       return () => clearTimeout(timer);
     } else if (gameMode === 'engine-vs-engine') {
-      const timer = setTimeout(() => triggerEngineMove(boardState), 400);
+      const timer = setTimeout(() => triggerEngineMoveRef.current(boardState), 300);
       return () => clearTimeout(timer);
     } else if (gameMode === 'two-player-analysis') {
-      const timer = setTimeout(() => triggerAnalysisOnly(boardState), 300);
+      const timer = setTimeout(() => triggerAnalysisOnlyRef.current(boardState), 200);
       return () => clearTimeout(timer);
     }
   }, [
     boardState,
     gameMode,
     isBrowsingHistory,
-    triggerEngineMove,
-    triggerAnalysisOnly,
     getGameStatus,
   ]);
 
@@ -548,8 +570,11 @@ export default function App() {
     setSearchStats(null);
 
     // Reset clocks
-    setWhiteTimeMs(timeControl.initialSeconds * 1000);
-    setBlackTimeMs(timeControl.initialSeconds * 1000);
+    const initMs = timeControl.initialSeconds * 1000;
+    setWhiteTimeMs(initMs);
+    whiteTimeMsRef.current = initMs;
+    setBlackTimeMs(initMs);
+    blackTimeMsRef.current = initMs;
   };
 
   // Flip Board
@@ -601,8 +626,11 @@ export default function App() {
       setStateSnapshots([parsed]);
       setHistoryIndex(-1);
       setSearchStats(null);
-      setWhiteTimeMs(timeControl.initialSeconds * 1000);
-      setBlackTimeMs(timeControl.initialSeconds * 1000);
+      const initMs = timeControl.initialSeconds * 1000;
+      setWhiteTimeMs(initMs);
+      whiteTimeMsRef.current = initMs;
+      setBlackTimeMs(initMs);
+      blackTimeMsRef.current = initMs;
     } catch (e) {
       console.error('Invalid FEN loaded', e);
     }
@@ -639,8 +667,11 @@ export default function App() {
   const handleTimeControlChange = (tcId: string) => {
     const found = TIME_PRESETS.find((p) => p.id === tcId) || TIME_PRESETS[0];
     setTimeControl(found);
-    setWhiteTimeMs(found.initialSeconds * 1000);
-    setBlackTimeMs(found.initialSeconds * 1000);
+    const ms = found.initialSeconds * 1000;
+    setWhiteTimeMs(ms);
+    whiteTimeMsRef.current = ms;
+    setBlackTimeMs(ms);
+    blackTimeMsRef.current = ms;
     setTimeoutStatus(null);
   };
 
@@ -708,11 +739,11 @@ export default function App() {
               <h1 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-2">
                 Шахматный движок Stockfish NNUE
                 <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                  ⚡ Полная сила • 2800+ ELO
+                  HalfKAv2_hm^ • 1.3 млрд позиций
                 </span>
               </h1>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Чистый нейросетевой поиск (HalfKAv2 NNUE), тайм-менеджмент SF 19, предходы и дебютная книга
+                Нейросеть 1024-15-32 (13 эпох на T80.oct2022.bestmove), тайм-менеджмент SF 19, предходы и GM-книга
               </p>
             </div>
           </div>

@@ -1,10 +1,14 @@
 /**
  * Neural Network Evaluation (NNUE) Module
  * Efficiently Updatable Neural Network loader and evaluator.
- * Supports Stockfish NNUE architecture (HalfKAv2_hm feature transformer + 8-bucket MLP).
+ * Architecture: HalfKAv2_hm^ (L1: 1024, L2: 15, L3: 32, 8 buckets)
+ * Trained on: 1.3 Billion positions (13 epochs of 100M positions on T80.oct2022.bestmove.binpack)
  */
 
 import { BoardState, PieceType } from '../types/chess';
+import { NNUE_MODEL_INFO } from './nnueModelInfo';
+
+export { NNUE_MODEL_INFO };
 
 // OrientTBL: Mirrors files a..d (0..3) horizontally so king is on files e..h
 const SQ_A1 = 0;

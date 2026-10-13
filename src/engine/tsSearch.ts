@@ -379,7 +379,7 @@ export class TypeScriptChessSearchEngine {
     this.nodesVisited++;
 
     // Time budget check periodically
-    if ((this.nodesVisited & 2047) === 0) {
+    if ((this.nodesVisited & 511) === 0) {
       if (this.timeLimitMs > 0 && Date.now() - this.startTime >= this.timeLimitMs) {
         this.isAborted = true;
         return 0;
@@ -522,7 +522,7 @@ export class TypeScriptChessSearchEngine {
   private quiescence(state: BoardState, alpha: number, beta: number, ply: number): number {
     this.nodesVisited++;
 
-    if ((this.nodesVisited & 2047) === 0) {
+    if ((this.nodesVisited & 511) === 0) {
       if (this.timeLimitMs > 0 && Date.now() - this.startTime >= this.timeLimitMs) {
         this.isAborted = true;
         return 0;

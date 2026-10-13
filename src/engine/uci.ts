@@ -127,11 +127,11 @@ export class UciEngine {
   }
 
   private handleUci() {
-    this.send('id name Stockfish NNUE Chess Engine');
-    this.send('id author AI Studio & Open Source');
+    this.send('id name Stockfish NNUE (HalfKAv2_hm^ 1024-15-32)');
+    this.send('id author linrock & AI Studio (Trained on 1.3B positions)');
     this.send(`option name Hash type spin default 64 min 1 max 512`);
     this.send(`option name Quiescence type check default true`);
-    this.send(`option name MaxDepth type spin default 6 min 1 max 12`);
+    this.send(`option name MaxDepth type spin default 8 min 1 max 16`);
     this.send('uciok');
   }
 
@@ -278,11 +278,13 @@ export class UciEngine {
     const scoreWhite = evaluateFromWhitePerspective(this.currentBoard);
     const cpTurn = this.currentBoard.turn === 'w' ? scoreWhite : -scoreWhite;
 
-    this.send('=== Stockfish NNUE Neural Network Evaluation ===');
+    this.send('=== Stockfish NNUE Evaluation ===');
     this.send(
       `Turn: ${this.currentBoard.turn === 'w' ? 'White' : 'Black'} | Total NNUE: ${scoreWhite > 0 ? '+' : ''}${(scoreWhite / 100).toFixed(2)} cp (Perspective: ${cpTurn > 0 ? '+' : ''}${(cpTurn / 100).toFixed(2)} cp)`
     );
-    this.send(`Architecture: Stockfish NNUE HalfKAv2_hm (22528 -> 1024 -> 16 -> 32 -> 1)`);
+    this.send(`Model Architecture: Features HalfKAv2_hm^ (22528 -> 1024 -> 15 -> 32 -> 1)`);
+    this.send(`Training Volume: 13 epochs x 100M = 1.3 Billion positions seen (Batch Size: 16384)`);
+    this.send(`Dataset: T80.oct2022.bestmove.binpack (linrock)`);
     this.send(`Game Phase: ${bd.gamePhase} (${bd.gamePhase > 0.5 ? 'Midgame' : 'Endgame'})`);
     this.send(
       `White Pieces: P:${bd.whitePieces.p} N:${bd.whitePieces.n} B:${bd.whitePieces.b} R:${bd.whitePieces.r} Q:${bd.whitePieces.q}`

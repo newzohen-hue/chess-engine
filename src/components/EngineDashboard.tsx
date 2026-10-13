@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { PositionBreakdown, SearchStats } from '../types/chess';
 import { BenchmarkSuiteResult, runWasmEngineBenchmark } from '../engine/benchmark';
+import { NNUE_MODEL_INFO } from '../engine/nnueModelInfo';
+import { NnueModelModal } from './NnueModelModal';
 import {
   Cpu,
   Layers,
@@ -14,6 +16,9 @@ import {
   Lightbulb,
   Binary,
   TrendingUp,
+  Brain,
+  Terminal,
+  Database,
 } from 'lucide-react';
 
 interface EngineDashboardProps {
@@ -50,6 +55,7 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
   onClearHint,
 }) => {
   const [showBreakdown, setShowBreakdown] = useState<boolean>(true);
+  const [isModelModalOpen, setIsModelModalOpen] = useState<boolean>(false);
   const [isBenchmarking, setIsBenchmarking] = useState<boolean>(false);
   const [benchProgress, setBenchProgress] = useState<string>('');
   const [benchResults, setBenchResults] = useState<BenchmarkSuiteResult | null>(null);
@@ -354,19 +360,46 @@ export const EngineDashboard: React.FC<EngineDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Network Architecture Details */}
-              <div className="p-2 rounded bg-slate-900/80 border border-slate-800 sm:col-span-2 flex items-center justify-between text-[11px] text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <Binary className="w-3.5 h-3.5 text-emerald-400" /> Архитектура:
-                </span>
-                <span className="font-mono text-slate-300">
-                  Stockfish HalfKAv2_hm (2x1024 → 16 → 32 → 1) • Квантование INT8
-                </span>
+              {/* Network Architecture & Training Pipeline Details */}
+              <div className="p-2.5 rounded bg-slate-900/90 border border-slate-800 sm:col-span-2 flex flex-col gap-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="flex items-center gap-1.5 text-slate-300 font-semibold">
+                    <Binary className="w-3.5 h-3.5 text-emerald-400" /> Топология:
+                  </span>
+                  <span className="font-mono text-emerald-300 font-bold">
+                    {NNUE_MODEL_INFO.features} (22,528 → 1024 → 15 → 32 → 1)
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-slate-800/60">
+                  <span className="text-slate-400 flex items-center gap-1">
+                    <Database className="w-3.5 h-3.5 text-sky-400" /> Объём обучения:
+                  </span>
+                  <span className="font-mono text-white font-semibold">
+                    13 эпох • {NNUE_MODEL_INFO.totalPositionsFormatted}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-slate-800/60">
+                  <span className="text-[10px] text-slate-500 font-mono truncate max-w-[240px]">
+                    Датасет: {NNUE_MODEL_INFO.datasetShort}
+                  </span>
+                  <button
+                    onClick={() => setIsModelModalOpen(true)}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-[11px] font-medium text-emerald-300 transition-colors cursor-pointer"
+                  >
+                    <Terminal className="w-3 h-3 text-emerald-400" />
+                    <span>Код Kaggle</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
         </div>
       )}
+
+      {/* Kaggle Training & Serialization Modal */}
+      <NnueModelModal isOpen={isModelModalOpen} onClose={() => setIsModelModalOpen(false)} />
 
       {/* C / WebAssembly Benchmark Button & Results */}
       <div className="pt-1">
