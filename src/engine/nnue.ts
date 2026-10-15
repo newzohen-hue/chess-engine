@@ -106,7 +106,10 @@ export async function loadNnueModel(url = '/models/final_model.nnue'): Promise<N
   modelLoadingPromise = (async () => {
     try {
       let arrayBuffer: ArrayBuffer;
-      if (typeof window !== 'undefined') {
+      const isNode = typeof process !== 'undefined' && process.versions != null && process.versions.node != null;
+
+      if (!isNode && typeof fetch !== 'undefined') {
+        // Browser Window or Web Worker
         const resp = await fetch(url);
         if (!resp.ok) {
           console.warn(`Failed to fetch NNUE file at ${url}: status ${resp.status}`);
@@ -114,8 +117,11 @@ export async function loadNnueModel(url = '/models/final_model.nnue'): Promise<N
         }
         arrayBuffer = await resp.arrayBuffer();
       } else {
+        // Node.js environment
         const fs = await import('fs');
-        const buf = fs.readFileSync(url.startsWith('/') ? '.' + url : url);
+        const path = await import('path');
+        const targetPath = url.startsWith('/') ? path.join(process.cwd(), 'public', url) : url;
+        const buf = fs.readFileSync(targetPath);
         arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
       }
 
@@ -329,8 +335,8 @@ export function evaluateNnue(state: BoardState): number | null {
   concat0Buf.fill(0);
   for (let out = 0; out < 15; out++) {
     const v = fc0OutBuf[out];
-    const sqrBig = (BigInt(v) * BigInt(v)) >> 21n;
-    concat0Buf[out] = Number(sqrBig > 127n ? 127n : sqrBig);
+    const sqr = Math.floor((v * v) / 2097152); // (v * v) >> 21
+    concat0Buf[out] = sqr > 127 ? 127 : sqr;
     concat0Buf[15 + out] = clamp(v >> 7, 0, 127);
   }
 
@@ -348,8 +354,8 @@ export function evaluateNnue(state: BoardState): number | null {
   concat1Buf.set(concat0Buf.subarray(0, 30), 0);
   for (let out = 0; out < 32; out++) {
     const v = fc1OutBuf[out];
-    const sqrBig = (BigInt(v) * BigInt(v)) >> 19n;
-    concat1Buf[30 + out] = Number(sqrBig > 127n ? 127n : sqrBig);
+    const sqr = Math.floor((v * v) / 524288); // (v * v) >> 19
+    concat1Buf[30 + out] = sqr > 127 ? 127 : sqr;
     concat1Buf[30 + 32 + out] = clamp(v >> 6, 0, 127);
   }
 
@@ -363,9 +369,8 @@ export function evaluateNnue(state: BoardState): number | null {
   const skip0 = fc0OutBuf[13] - fc0OutBuf[14];
   fwdOut += skip0;
 
-  const multiplier = 600n * 16n;
-  const denominator = 128n * (1n << 6n) * 2n;
-  const positional = Number((BigInt(fwdOut) * multiplier) / denominator);
+  // Multiplier: (600 * 16) / (128 * 64 * 2) = 9600 / 16384
+  const positional = Math.round((fwdOut * 9600) / 16384);
 
   const totalRaw = psqtScore + positional;
   // Convert Stockfish internal units (where PawnValue = 208 and OutputScale = 16) to standard centipawns

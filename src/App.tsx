@@ -42,6 +42,8 @@ import { EngineDashboard } from './components/EngineDashboard';
 import { MoveHistory } from './components/MoveHistory';
 import { PresetsModal } from './components/PresetsModal';
 import { UciConsole } from './components/UciConsole';
+import { LichessBotView } from './components/LichessBotView';
+import { LichessBotClient } from './engine/lichessBot';
 import {
   RotateCcw,
   Volume2,
@@ -121,6 +123,10 @@ export default function App() {
   const wasmEngineRef = useRef<WasmChessSearchEngine>(new WasmChessSearchEngine());
   const uciEngineRef = useRef<UciEngine>(new UciEngine(wasmEngineRef.current));
 
+  // Lichess Bot Framework Client
+  const lichessBotRef = useRef<LichessBotClient>(new LichessBotClient());
+  const [isLichessBotMode, setIsLichessBotMode] = useState<boolean>(false);
+
   // Determine current active display board (allows reviewing past moves)
   const isBrowsingHistory = historyIndex >= 0 && historyIndex < history.length - 1;
   const displayedState = isBrowsingHistory ? stateSnapshots[historyIndex + 1] : boardState;
@@ -198,27 +204,29 @@ export default function App() {
       const turn = boardStateRef.current.turn;
       if (turn === 'w') {
         setWhiteTimeMs((prev) => {
-          if (prev <= 100) {
+          const nextVal = prev <= 100 ? 0 : prev - 100;
+          whiteTimeMsRef.current = nextVal;
+          if (nextVal === 0) {
             // White flagged
             wasmEngineRef.current.stop();
             setIsSearching(false);
             playMoveSound('gameover');
             setTimeoutStatus('timeout-white');
-            return 0;
           }
-          return prev - 100;
+          return nextVal;
         });
       } else {
         setBlackTimeMs((prev) => {
-          if (prev <= 100) {
+          const nextVal = prev <= 100 ? 0 : prev - 100;
+          blackTimeMsRef.current = nextVal;
+          if (nextVal === 0) {
             // Black flagged
             wasmEngineRef.current.stop();
             setIsSearching(false);
             playMoveSound('gameover');
             setTimeoutStatus('timeout-black');
-            return 0;
           }
-          return prev - 100;
+          return nextVal;
         });
       }
     }, 100);
@@ -364,8 +372,21 @@ export default function App() {
           setTimeout(() => {
             executeMove(matchPreMove);
           }, 30);
+          return;
         }
       }
+    }
+
+    // Direct auto-trigger for engine moves (guarantees timed games moves without clock interruption)
+    const engineNeedsToMove =
+      (gameMode === 'player-vs-engine-white' && next.turn === 'b') ||
+      (gameMode === 'player-vs-engine-black' && next.turn === 'w') ||
+      gameMode === 'engine-vs-engine';
+
+    if (engineNeedsToMove) {
+      setTimeout(() => {
+        triggerEngineMoveRef.current(next);
+      }, 50);
     }
   }, [timeControl, gameMode]);
 
@@ -548,7 +569,6 @@ export default function App() {
     boardState,
     gameMode,
     isBrowsingHistory,
-    getGameStatus,
   ]);
 
   // Handle New Game
@@ -654,6 +674,11 @@ export default function App() {
 
   // Game mode change
   const handleModeChange = (mode: GameMode) => {
+    if (mode === 'lichess-bot') {
+      setIsLichessBotMode(true);
+      return;
+    }
+    setIsLichessBotMode(false);
     setGameMode(mode);
     setPreMove(null);
     if (mode === 'player-vs-engine-white') {
@@ -781,6 +806,20 @@ export default function App() {
               <span>UCI</span>
             </button>
 
+            {/* Lichess Bot Launcher Button */}
+            <button
+              onClick={() => setIsLichessBotMode((prev) => !prev)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer shadow-sm ${
+                isLichessBotMode
+                  ? 'bg-emerald-600 border-emerald-400 text-white shadow-emerald-900/40 ring-2 ring-emerald-500/30'
+                  : 'bg-emerald-950/60 hover:bg-emerald-900/60 border-emerald-500/50 text-emerald-300'
+              }`}
+              title="Запуск движка в Lichess Bots (Ресурсный режим без доски)"
+            >
+              <Bot className="w-4 h-4 text-emerald-400 animate-pulse" />
+              <span>Lichess Bot</span>
+            </button>
+
             {/* Eval Bar position button */}
             <button
               onClick={cycleEvalBar}
@@ -825,10 +864,18 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Board & Engine Work Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Chessboard + Eval Bar + Clocks */}
-        <div className="lg:col-span-7 flex flex-col items-center gap-2.5">
+      {/* Main Content: Either Lichess Bot Mode (Zero Board DOM, 100% Resource-efficient) OR Standard Chessboard */}
+      {isLichessBotMode ? (
+        <main className="flex-1 max-w-7xl w-full mx-auto p-2 sm:p-4">
+          <LichessBotView
+            botClient={lichessBotRef.current}
+            onReturnToBoard={() => setIsLichessBotMode(false)}
+          />
+        </main>
+      ) : (
+        <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left Column: Chessboard + Eval Bar + Clocks */}
+          <div className="lg:col-span-7 flex flex-col items-center gap-2.5">
           {/* Status Alert Banner (Shown for terminal game over states) */}
           {gameStatus !== 'ongoing' && gameStatus !== 'check' && (
             <div
@@ -1082,6 +1129,19 @@ export default function App() {
                 <Swords className="w-3.5 h-3.5" />
                 <span>Бот vs Бот</span>
               </button>
+
+              <button
+                onClick={() => handleModeChange('lichess-bot')}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                  isLichessBotMode
+                    ? 'bg-emerald-600 text-white font-semibold'
+                    : 'text-emerald-400 hover:text-white'
+                }`}
+                title="Автономный запуск движка в Lichess Bots (без доски)"
+              >
+                <Bot className="w-3.5 h-3.5" />
+                <span>Lichess</span>
+              </button>
             </div>
 
             {/* Board Utility Buttons */}
@@ -1171,6 +1231,7 @@ export default function App() {
           />
         </div>
       </main>
+      )}
 
       {/* FEN / Test Presets Modal */}
       <PresetsModal

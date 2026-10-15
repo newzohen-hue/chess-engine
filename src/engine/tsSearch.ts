@@ -202,6 +202,9 @@ export class TypeScriptChessSearchEngine {
       }
 
       if (isMate) break;
+
+      // Yield to the event loop so progress updates render and browser never hangs
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
     const finalElapsed = Math.max(1, Date.now() - this.startTime);

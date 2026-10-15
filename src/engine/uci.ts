@@ -25,6 +25,7 @@ import {
 import { evaluateFromWhitePerspective, getPositionBreakdown } from './evaluation';
 import { WasmChessSearchEngine } from './wasmEngine';
 import { evaluateNnue, isNnueLoaded } from './nnue';
+import { calculateEngineMoveTime } from './timeManagement';
 
 export interface UciOutputHandler {
   onOutput: (line: string) => void;
@@ -207,20 +208,43 @@ export class UciEngine {
 
     let searchDepth = this.maxDepth;
     let timeLimitMs = 1500;
+    let wtime: number | undefined;
+    let btime: number | undefined;
+    let winc = 0;
+    let binc = 0;
 
     for (let i = 1; i < tokens.length; i++) {
       const t = tokens[i].toLowerCase();
       if (t === 'depth' && i + 1 < tokens.length) {
-        searchDepth = Math.max(1, Math.min(12, parseInt(tokens[i + 1], 10) || 6));
+        searchDepth = Math.max(1, Math.min(14, parseInt(tokens[i + 1], 10) || 6));
       } else if (t === 'movetime' && i + 1 < tokens.length) {
         timeLimitMs = parseInt(tokens[i + 1], 10) || 1000;
       } else if (t === 'infinite') {
         timeLimitMs = 0;
-        searchDepth = 10;
-      } else if ((t === 'wtime' && this.currentBoard.turn === 'w') || (t === 'btime' && this.currentBoard.turn === 'b')) {
-        const timeRemaining = parseInt(tokens[i + 1], 10) || 10000;
-        timeLimitMs = Math.max(200, Math.floor(timeRemaining / 30));
+        searchDepth = 12;
+      } else if (t === 'wtime' && i + 1 < tokens.length) {
+        wtime = parseInt(tokens[i + 1], 10);
+      } else if (t === 'btime' && i + 1 < tokens.length) {
+        btime = parseInt(tokens[i + 1], 10);
+      } else if (t === 'winc' && i + 1 < tokens.length) {
+        winc = parseInt(tokens[i + 1], 10) || 0;
+      } else if (t === 'binc' && i + 1 < tokens.length) {
+        binc = parseInt(tokens[i + 1], 10) || 0;
       }
+    }
+
+    if (this.currentBoard.turn === 'w' && wtime !== undefined) {
+      timeLimitMs = calculateEngineMoveTime(
+        wtime,
+        winc,
+        this.currentBoard.fullmoveNumber * 2
+      );
+    } else if (this.currentBoard.turn === 'b' && btime !== undefined) {
+      timeLimitMs = calculateEngineMoveTime(
+        btime,
+        binc,
+        this.currentBoard.fullmoveNumber * 2
+      );
     }
 
     this.isSearching = true;

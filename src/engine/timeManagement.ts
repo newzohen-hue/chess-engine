@@ -57,7 +57,9 @@ export function calculateEngineMoveTime(
   const minTime = Math.min(100, Math.max(20, Math.floor(remainingMs * 0.05)));
   const maxCeiling = Math.max(minTime, Math.floor(remainingMs * 0.35));
 
-  const allocated = Math.max(minTime, Math.min(maxCeiling, Math.round(baseTime)));
+  // Web engine practical cap: keep moves responsive (max 3000ms)
+  const safeCap = Math.min(3000, maxCeiling);
+  const allocated = Math.max(minTime, Math.min(safeCap, Math.round(baseTime)));
   return allocated;
 }
 

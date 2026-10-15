@@ -95,5 +95,6 @@ export type GameMode =
   | 'player-vs-engine-white'
   | 'player-vs-engine-black'
   | 'two-player-analysis'
-  | 'engine-vs-engine';
+  | 'engine-vs-engine'
+  | 'lichess-bot';
 
